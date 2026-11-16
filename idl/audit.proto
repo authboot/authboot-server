@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package audit;
+
+import "api.proto";
+
+option go_package = "audit";
+
+// AuditLog 是一条管理员操作审计记录（只读视图）。before/after/extra 为 JSON
+// 文本；敏感字段在写入时已脱敏。created_at 为 unix 秒。
+message AuditLog {
+  int64 id = 1 [(api.go_tag)='json:"id"'];
+  string request_id = 2 [(api.go_tag)='json:"request_id"'];
+  string trace_id = 3 [(api.go_tag)='json:"trace_id"'];
+  int64 admin_id = 4 [(api.go_tag)='json:"admin_id"'];
+  int64 organization_id = 5 [(api.go_tag)='json:"organization_id"'];
+  string session_id = 6 [(api.go_tag)='json:"session_id"'];
+  string action = 7 [(api.go_tag)='json:"action"'];
+  string resource_type = 8 [(api.go_tag)='json:"resource_type"'];
+  string resource_id = 9 [(api.go_tag)='json:"resource_id"'];
+  string method = 10 [(api.go_tag)='json:"method"'];
+  string path = 11 [(api.go_tag)='json:"path"'];
+  string ip = 12 [(api.go_tag)='json:"ip"'];
+  string user_agent = 13 [(api.go_tag)='json:"user_agent"'];
+  bool success = 14 [(api.go_tag)='json:"success"'];
+  int32 status_code = 15 [(api.go_tag)='json:"status_code"'];
+  string err_msg = 16 [(api.go_tag)='json:"err_msg"'];
+  string before = 17 [(api.go_tag)='json:"before"'];
+  string after = 18 [(api.go_tag)='json:"after"'];
+  string extra = 19 [(api.go_tag)='json:"extra"'];
+  int64 latency_ms = 20 [(api.go_tag)='json:"latency_ms"'];
+  int64 created_at = 21 [(api.go_tag)='json:"created_at"'];
+}
+
+// 查询某 Organization 的管理员审计日志，支持按管理员、动作、时间范围过滤 + 分页。
+// 未提供的过滤字段表示不限制。
+message ListAuditLogsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 admin_id = 2 [(api.query) = "admin_id"];
+  string action = 3 [(api.query) = "action"];
+  int64 start_time = 4 [(api.query) = "start_time"]; // unix 秒，created_at 下界
+  int64 end_time = 5 [(api.query) = "end_time"];     // unix 秒，created_at 上界
+  int32 page = 6 [(api.query) = "page"];
+  int32 page_size = 7 [(api.query) = "page_size"];
+}
+
+message ListAuditLogsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated AuditLog logs = 3[(api.go_tag)='json:"logs"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+// 一条 App 用户登录日志（只读视图）。identity_value 写入时已脱敏；success 标识
+// 本次登录成败；created_at 为 unix 秒。
+message UserLoginLog {
+  int64 id = 1 [(api.go_tag)='json:"id"'];
+  int64 organization_id = 2 [(api.go_tag)='json:"organization_id"'];
+  int64 user_id = 3 [(api.go_tag)='json:"user_id"'];
+  string identity_type = 4 [(api.go_tag)='json:"identity_type"'];
+  string identity_value = 5 [(api.go_tag)='json:"identity_value"'];
+  int64 client_id = 6 [(api.go_tag)='json:"client_id"'];
+  string device_id = 7 [(api.go_tag)='json:"device_id"'];
+  string device_name = 8 [(api.go_tag)='json:"device_name"'];
+  string ip = 9 [(api.go_tag)='json:"ip"'];
+  string user_agent = 10 [(api.go_tag)='json:"user_agent"'];
+  bool success = 11 [(api.go_tag)='json:"success"'];
+  string err_msg = 12 [(api.go_tag)='json:"err_msg"'];
+  int64 created_at = 13 [(api.go_tag)='json:"created_at"'];
+}
+
+// 查询某 Organization 的用户登录日志，支持按用户、身份类型、成败、时间范围
+// 过滤 + 分页。
+message ListUserLoginLogsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.query) = "user_id"];
+  string identity_type = 3 [(api.query) = "identity_type"];
+  int32 success = 4 [(api.query) = "success"]; // 0=全部 1=成功 2=失败
+  int64 start_time = 5 [(api.query) = "start_time"]; // unix 秒，created_at 下界
+  int64 end_time = 6 [(api.query) = "end_time"];     // unix 秒，created_at 上界
+  int32 page = 7 [(api.query) = "page"];
+  int32 page_size = 8 [(api.query) = "page_size"];
+}
+
+message ListUserLoginLogsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated UserLoginLog logs = 3[(api.go_tag)='json:"logs"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+// 异常登录告警：统计最近 window_minutes 内失败次数 ≥ failed_threshold 的账号
+// （暴力破解/撞库信号）。window_minutes 默认 30（上限 1440）；failed_threshold
+// 默认 5（下限 1）。
+message AbnormalLoginRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int32 window_minutes = 2 [(api.query) = "window_minutes"];
+  int32 failed_threshold = 3 [(api.query) = "failed_threshold"];
+}
+
+message AbnormalLoginResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated AbnormalAccount accounts = 3[(api.go_tag)='json:"accounts"'];
+}
+
+// 一个可能被爆破的账号。
+message AbnormalAccount {
+  int64 user_id = 1 [(api.go_tag)='json:"user_id"'];
+  string identity_value = 2 [(api.go_tag)='json:"identity_value"']; // 脱敏后的登录标识
+  int64 failed_count = 3 [(api.go_tag)='json:"failed_count"'];
+  repeated string ips = 4 [(api.go_tag)='json:"ips"'];
+}
+
+// 审计日志查询服务（平台管理员，Organization 维度）。只读。
+service AuditHandler {
+  rpc ListAuditLogs(ListAuditLogsRequest) returns(ListAuditLogsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/audit-logs";
+  }
+
+  rpc ListUserLoginLogs(ListUserLoginLogsRequest) returns(ListUserLoginLogsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/user-login-logs";
+  }
+
+  rpc AbnormalLoginSummary(AbnormalLoginRequest) returns(AbnormalLoginResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/user-login-logs/abnormal";
+  }
+}

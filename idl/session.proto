@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+package session;
+
+import "api.proto";
+
+option go_package = "session";
+
+// ============================================================
+// Session 分两类，对应两套独立身份，不可混用：
+//   1. Session       —— App 普通用户 (Organization User) 会话，绑定 client/device。
+//   2. AdminSession  —— 平台管理员 (Platform Account) 会话，跨 Organization 存在，
+//                       通过 SwitchOrganization 切换当前绑定的 Organization。
+// ============================================================
+
+enum SessionStatus {
+  SESSION_STATUS_UNKNOWN = 0;
+  SESSION_STATUS_ACTIVE = 1;
+  SESSION_STATUS_REVOKED = 2;
+  SESSION_STATUS_EXPIRED = 3;
+}
+
+// App 普通用户会话：必须绑定 organization_id + client_id
+message Session {
+  string session_id = 1;
+  int64 organization_id = 2;
+  int64 user_id = 3;
+  int64 client_id = 4;
+  string device_id = 5;
+  string device_name = 6;
+  SessionStatus status = 7;
+  int64 created_at = 8;
+  int64 expires_at = 9;
+  int64 last_active_at = 10;
+}
+
+// 平台管理员会话：归属 Platform Account (account_id)，与 client 无关。
+// 会话在多次 SwitchOrganization 之间保持不变（切换组织无需重新登录），
+// current_organization_id / membership_id 反映当前选中的 Organization，
+// 尚未选择组织（刚登录、平台级令牌）时为 0。
+message AdminSession {
+  string session_id = 1;
+  int64 account_id = 2;
+  int64 current_organization_id = 3;
+  int64 membership_id = 4;
+  string device_id = 6;
+  string device_name = 7;
+  SessionStatus status = 8;
+  int64 created_at = 9;
+  int64 expires_at = 10;
+  int64 last_active_at = 11;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Session session = 3[(api.go_tag)='json:"session"'];
+}
+
+message ListSessionsRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message ListSessionsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated Session sessions = 3[(api.go_tag)='json:"sessions"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+message RevokeSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeSessionResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message RevokeAllSessionsRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+}
+
+message RevokeAllSessionsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// App 普通用户会话管理：以 organization + user 为边界
+service SessionHandler {
+  rpc GetSession(GetSessionRequest) returns(GetSessionResponse) {
+    option (api.get) = "/api/v1/sessions/:session_id";
+  }
+
+  rpc ListSessions(ListSessionsRequest) returns(ListSessionsResponse) {
+    option (api.get) = "/api/v1/organizations/:organization_id/users/:user_id/sessions";
+  }
+
+  rpc RevokeSession(RevokeSessionRequest) returns(RevokeSessionResponse) {
+    option (api.post) = "/api/v1/sessions/:session_id/revoke";
+  }
+
+  rpc RevokeAllSessions(RevokeAllSessionsRequest) returns(RevokeAllSessionsResponse) {
+    option (api.post) = "/api/v1/organizations/:organization_id/users/:user_id/sessions/revoke-all";
+  }
+}
+
+// ============================================================
+// 平台管理员会话管理 (Platform Account)：以 account 为边界，与 App 用户会话隔离
+// ============================================================
+
+message GetAdminSessionRequest {
+  string session_id = 1;
+}
+
+message GetAdminSessionResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  AdminSession session = 3[(api.go_tag)='json:"session"'];
+}
+
+message ListAdminSessionsRequest {
+  int64 account_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListAdminSessionsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated AdminSession sessions = 3[(api.go_tag)='json:"sessions"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+message RevokeAdminSessionRequest {
+  string session_id = 1;
+}
+
+message RevokeAdminSessionResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message RevokeAllAdminSessionsRequest {
+  int64 account_id = 1;
+}
+
+message RevokeAllAdminSessionsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+service AdminSessionHandler {
+  rpc GetAdminSession(GetAdminSessionRequest) returns(GetAdminSessionResponse) {
+    option (api.get) = "/api/v1/admin/sessions/:session_id";
+  }
+
+  rpc ListAdminSessions(ListAdminSessionsRequest) returns(ListAdminSessionsResponse) {
+    option (api.get) = "/api/v1/admin/accounts/:account_id/sessions";
+  }
+
+  rpc RevokeAdminSession(RevokeAdminSessionRequest) returns(RevokeAdminSessionResponse) {
+    option (api.post) = "/api/v1/admin/sessions/:session_id/revoke";
+  }
+
+  rpc RevokeAllAdminSessions(RevokeAllAdminSessionsRequest) returns(RevokeAllAdminSessionsResponse) {
+    option (api.post) = "/api/v1/admin/accounts/:account_id/sessions/revoke-all";
+  }
+}

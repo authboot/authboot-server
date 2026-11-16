@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package notification;
+
+import "api.proto";
+
+option go_package = "notification";
+
+enum NotificationType {
+  NOTIFICATION_TYPE_UNKNOWN = 0;
+
+  // 系统通知
+  NOTIFICATION_TYPE_SYSTEM = 1;
+
+  // 安全通知
+  NOTIFICATION_TYPE_SECURITY = 2;
+
+  // 账户通知
+  NOTIFICATION_TYPE_ACCOUNT = 3;
+
+  // 业务通知
+  NOTIFICATION_TYPE_BUSINESS = 4;
+
+  // 公告
+  NOTIFICATION_TYPE_ANNOUNCEMENT = 5;
+}
+
+enum NotificationLevel {
+  NOTIFICATION_LEVEL_UNKNOWN = 0;
+
+  NOTIFICATION_LEVEL_INFO = 1;
+  NOTIFICATION_LEVEL_SUCCESS = 2;
+  NOTIFICATION_LEVEL_WARNING = 3;
+  NOTIFICATION_LEVEL_ERROR = 4;
+}
+
+enum NotificationStatus {
+  NOTIFICATION_STATUS_UNKNOWN = 0;
+
+  NOTIFICATION_STATUS_UNREAD = 1;
+  NOTIFICATION_STATUS_READ = 2;
+}
+
+message Notification {
+  int64 id = 1;
+
+  // 接收通知的管理员 / 用户
+  int64 user_id = 2;
+
+  // 通知类型
+  NotificationType type = 3;
+
+  // 通知级别
+  NotificationLevel level = 4;
+
+  // 标题
+  string title = 5;
+
+  // 内容
+  string content = 6;
+
+  // 前端跳转地址
+  string url = 7;
+
+  // 状态
+  NotificationStatus status = 8;
+
+  // 扩展数据，前端可根据业务类型解析
+  string data = 9;
+
+  int64 created_at = 10;
+  int64 read_at = 11;
+}
+
+message ListNotificationsRequest {
+  int32 page = 1 [(api.vd) = "gte:1"];
+  int32 page_size = 2 [(api.vd) = "gte:1,lte:100"];
+
+  // 只查询指定状态
+  NotificationStatus status = 3;
+
+  // 只查询指定类型
+  NotificationType type = 4;
+}
+
+message ListNotificationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated Notification notifications = 3[(api.go_tag)='json:"notifications"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+
+  // 未读数量
+  int64 unread_count = 5[(api.go_tag)='json:"unread_count"'];
+}
+
+message GetNotificationRequest {
+  int64 id = 1 [(api.path) = "id", (api.vd) = "$!=''"];
+}
+
+message GetNotificationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Notification notification = 3[(api.go_tag)='json:"notification"'];
+}
+
+message ReadNotificationRequest {
+  int64 id = 1 [(api.path) = "id", (api.vd) = "$!=''"];
+}
+
+message ReadNotificationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Notification notification = 3[(api.go_tag)='json:"notification"'];
+}
+
+message ReadAllNotificationsRequest {
+}
+
+message ReadAllNotificationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  int64 affected_count = 3[(api.go_tag)='json:"affected_count"'];
+}
+
+message DeleteNotificationRequest {
+  int64 id = 1 [(api.path) = "id", (api.vd) = "$!=''"];
+}
+
+message DeleteNotificationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message DeleteAllNotificationsRequest {
+}
+
+message DeleteAllNotificationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  int64 affected_count = 3[(api.go_tag)='json:"affected_count"'];
+}
+
+// 轮询用的轻量接口：前端带上本地已知的最新 notification id，
+// 服务端只回是否有更新的通知，不返回列表，避免每次轮询都拉全量。
+message CheckNewNotificationsRequest {
+  // 客户端当前已知的最新通知 id（首次轮询可传 0）
+  int64 last_notification_id = 1 [(api.query) = "last_notification_id"];
+}
+
+message CheckNewNotificationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  bool has_new = 3[(api.go_tag)='json:"has_new"'];
+  int64 latest_id = 4[(api.go_tag)='json:"latest_id"'];
+  int64 unread_count = 5[(api.go_tag)='json:"unread_count"'];
+}
+
+service NotificationHandler {
+  rpc ListNotifications(ListNotificationsRequest) returns(ListNotificationsResponse) {
+    option (api.get) = "/api/v1/admin/notifications";
+  }
+
+  rpc CheckNewNotifications(CheckNewNotificationsRequest) returns(CheckNewNotificationsResponse) {
+    option (api.get) = "/api/v1/admin/notifications/check-new";
+  }
+
+  rpc GetNotification(GetNotificationRequest) returns(GetNotificationResponse) {
+    option (api.get) = "/api/v1/admin/notifications/:id";
+  }
+
+  rpc ReadNotification(ReadNotificationRequest) returns(ReadNotificationResponse) {
+    option (api.post) = "/api/v1/admin/notifications/:id/read";
+  }
+
+  rpc ReadAllNotifications(ReadAllNotificationsRequest) returns(ReadAllNotificationsResponse) {
+    option (api.post) = "/api/v1/admin/notifications/read-all";
+  }
+
+  rpc DeleteNotification(DeleteNotificationRequest) returns(DeleteNotificationResponse) {
+    option (api.delete) = "/api/v1/admin/notifications/:id";
+  }
+
+  rpc DeleteAllNotifications(DeleteAllNotificationsRequest) returns(DeleteAllNotificationsResponse) {
+    option (api.delete) = "/api/v1/admin/notifications";
+  }
+}

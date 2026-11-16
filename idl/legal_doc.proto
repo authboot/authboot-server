@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package legaldoc;
+
+import "api.proto";
+
+option go_package = "legaldoc";
+
+// ============================================================
+// 组织法律文档（用户协议 / 隐私政策）—— 版本化模型，对齐 authboot-admin
+// 的 Legal 面板（legal-settings.tsx / legal-document-panel.tsx）：
+//   - 文档是不可变版本历史：发布只追加新版本并 retire 前一个 active；
+//   - 每版本带 url / changelog / 生效时间 / 发布人 / 内容哈希 / 可选快照；
+//   - doc_type 用后端规范名：user_agreement(前端 terms) / privacy_policy(前端 privacy)；
+//   - status=active/scheduled/retired；scheduled 到点自动生效（读时派生）。
+// ============================================================
+
+// 单个已发布版本。发布后不可修改、不可删除。
+message LegalVersion {
+  int64 version = 1[(api.go_tag)='json:"version"'];
+  string doc_type = 2[(api.go_tag)='json:"doc_type"'];
+  // 对外展示的文档链接（登录/注册页要求用户接受协议时指向这里）
+  string url = 3[(api.go_tag)='json:"url"'];
+  // 变更摘要，版本历史展示
+  string changelog = 4[(api.go_tag)='json:"changelog"'];
+  // active / scheduled / retired
+  string status = 5[(api.go_tag)='json:"status"'];
+  int64 effective_at = 6[(api.go_tag)='json:"effective_at"'];
+  string published_by = 7[(api.go_tag)='json:"published_by"'];
+  int64 published_at = 8[(api.go_tag)='json:"published_at"'];
+  // 归档快照的 SHA-256 前 16 hex（合规凭证）
+  string content_hash = 9[(api.go_tag)='json:"content_hash"'];
+  bool has_snapshot = 10[(api.go_tag)='json:"has_snapshot"'];
+  // 仅单个版本详情/公开读取返回；列表不携带（避免响应过大）
+  string content = 11[(api.go_tag)='json:"content"'];
+}
+
+// ---- 管理端 ----
+
+message PublishLegalDocRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  // user_agreement / privacy_policy
+  string doc_type = 2 [(api.vd) = "$!=''"];
+  string url = 3 [(api.vd) = "$!=''"];
+  string changelog = 4 [(api.vd) = "$!=''"];
+  // 生效时间（unix 秒）。0 = 立即生效（发布即 active 并 retire 旧版本）；
+  // 未来时间 = scheduled，到点自动生效。
+  int64 effective_at = 5;
+  // 快照由服务端发布时抓取 url 自动归档（含 SHA-256 哈希）：
+  //   - 仅允许 http/https，拒绝内网/环回地址（SSRF 防护）
+  //   - 10s 超时，响应体上限 256KB
+  // 抓取失败时整个发布失败，发布者需修正 URL 后重试。
+}
+
+message PublishLegalDocResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  LegalVersion version = 3[(api.go_tag)='json:"version"'];
+}
+
+message ListLegalVersionsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string doc_type = 2 [(api.query) = "doc_type"];
+}
+
+message ListLegalVersionsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated LegalVersion versions = 3[(api.go_tag)='json:"versions"'];
+}
+
+// 管理端查看某一版本的归档快照原文
+message GetLegalVersionRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string doc_type = 2 [(api.query) = "doc_type"];
+  int64 version = 3 [(api.query) = "version"];
+}
+
+message GetLegalVersionResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  LegalVersion version = 3[(api.go_tag)='json:"version"'];
+}
+
+// ---- 公开读取（App 登录/注册页，无需登录）----
+
+message GetPublicLegalDocRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string doc_type = 2 [(api.query) = "doc_type"];
+  // 当前生效版本的 version；匹配时返回 unchanged=true 不带 content，
+  // 避免客户端重复拉取。
+  int64 version = 3 [(api.query) = "version"];
+  // include_content=false 时仅返回元数据（版本号/链接/哈希）
+  bool include_content = 4 [(api.query) = "include_content"];
+}
+
+message GetPublicLegalDocResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  LegalVersion version = 3[(api.go_tag)='json:"version"'];
+  bool unchanged = 4[(api.go_tag)='json:"unchanged"'];
+}
+
+// 管理端：组织法律文档版本维护（侧边栏「法律文档」）
+service LegalDocHandler {
+  // 发布新版本（追加，不可变）
+  rpc PublishLegalDoc(PublishLegalDocRequest) returns(PublishLegalDocResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/legal-docs";
+  }
+
+  // 版本历史（最新在前）
+  rpc ListLegalVersions(ListLegalVersionsRequest) returns(ListLegalVersionsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/legal-docs/versions";
+  }
+
+  // 单版本详情（含归档快照原文）
+  rpc GetLegalVersion(GetLegalVersionRequest) returns(GetLegalVersionResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/legal-docs/version";
+  }
+}
+
+// 公开读取：无需登录（App 用户在登录/注册页查看当前生效版本）
+service LegalDocPublicHandler {
+  rpc GetPublicLegalDoc(GetPublicLegalDocRequest) returns(GetPublicLegalDocResponse) {
+    option (api.get) = "/api/v1/public/organizations/:organization_id/legal-docs";
+  }
+}

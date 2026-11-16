@@ -1,0 +1,282 @@
+syntax = "proto3";
+
+package auth;
+
+import "api.proto";
+import "common.proto";
+import "user.proto";
+import "session.proto";
+import "admin.proto";
+
+option go_package = "auth";
+
+// ============================================================
+// 身份体系说明（务必区分，二者不可混用）：
+//   1. Platform Account（平台管理员）：登录 authboot 平台进行管理，
+//      使用 email/phone + password 登录，可归属多个 Organization。
+//   2. Organization User（App 普通用户）：具体 App 的业务用户，
+//      登录必须绑定 organization_id + client_id，只属于一个 Organization。
+// 两套身份拥有各自独立的登录流程、令牌与鉴权上下文，禁止相互复用。
+// ============================================================
+
+// App 普通用户的鉴权上下文（业务用户，绑定单个 Organization）
+message AuthContext {
+  int64 user_id = 1;
+  int64 organization_id = 2;
+  int64 client_id = 3;
+  string session_id = 4;
+}
+
+// 平台管理员进入某个 Organization Console 后的鉴权上下文
+message AdminAuthContext {
+  int64 account_id = 1;
+  int64 organization_id = 2;
+  int64 membership_id = 3;
+  string session_id = 5;
+}
+
+// ============================================================
+// 一、User 普通用户认证 (Organization User)
+//   身份边界 = organization_id；登录/注册必须携带 organization_id + client_id。
+// ============================================================
+
+message LoginRequest {
+  int64 organization_id = 1;
+  int64 client_id = 2;
+  common.IdentityType identity_type = 3;
+  string identity_value = 4;
+  string credential = 5;
+  string device_id = 6;
+  string device_name = 7;
+  string username = 8;
+  string password = 9;
+
+  // 登录时认领（claim-at-login）：本次登录通过后，把"另一个身份"所属的账号并入
+  // 当前登录账号。业界推荐用邮箱/手机做合并键、在登录时认领而非事后合并，且
+  // 合并必须用户主动确认 + 双向验证。三者缺一不可：
+  //   - claim_identity_type/value：要认领的身份（email/phone 需带联系方式值；
+  //     wechat/google/apple 无需 value，openid 由授权码换得）
+  //   - claim_credential：证明"目标身份"归属的凭证
+  //     · 认领邮箱/手机账号 → 发到该联系方式的一次性验证码（bind_email / bind_mobile 场景码）
+  //     · 认领 OAuth 账号 → 一次全新的授权码（等于重新授权该账号）
+  //   - confirm_claim：用户明确勾选确认合并（禁止自动合并）
+  common.IdentityType claim_identity_type = 10;
+  string claim_identity_value = 11;
+  string claim_credential = 12;
+  bool confirm_claim = 13;
+}
+
+message RegisterRequest {
+  int64 organization_id = 1;
+  int64 client_id = 2;
+  common.IdentityType identity_type = 3;
+  string identity_value = 4;
+  string credential = 5;
+  string nickname = 6;
+  string avatar = 7;
+  string device_id = 8;
+  string device_name = 9;
+}
+
+message LoginResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  user.User user = 3[(api.go_tag)='json:"user"'];
+  string access_token = 4[(api.go_tag)='json:"access_token"'];
+  string refresh_token = 5[(api.go_tag)='json:"refresh_token"'];
+  int64 access_token_expires_at = 6[(api.go_tag)='json:"access_token_expires_at"'];
+  int64 refresh_token_expires_at = 7[(api.go_tag)='json:"refresh_token_expires_at"'];
+  session.Session session = 8[(api.go_tag)='json:"session"'];
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message LogoutRequest {
+  string session_id = 1;
+}
+
+message LogoutResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message ValidateTokenRequest {
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  bool valid = 3[(api.go_tag)='json:"valid"'];
+  AuthContext context = 4[(api.go_tag)='json:"context"'];
+  int64 expires_at = 5[(api.go_tag)='json:"expires_at"'];
+}
+
+// 修改密码（需登录）：账号已设置密码时校验旧密码。
+message ChangePasswordRequest {
+  string old_password = 1;
+  string new_password = 2 [(api.vd) = "$!=''"];
+}
+
+message ChangePasswordResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// 忘记密码（无需登录）：用绑定邮箱/手机收到的 reset_password 验证码换新密码。
+message ResetPasswordRequest {
+  int64 organization_id = 1 [(api.vd) = "$!=''"];
+  common.IdentityType identity_type = 2;
+  string identity_value = 3 [(api.vd) = "$!=''"];
+  string credential = 4 [(api.vd) = "$!=''"];
+  string new_password = 5 [(api.vd) = "$!=''"];
+}
+
+message ResetPasswordResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// 注销账号（需登录）：用密码，或绑定邮箱/手机收到的 delete_account 验证码
+// 证明所有权。账号会被匿名化并停用，登录身份全部删除（不可再登录）。
+message DeleteAccountRequest {
+  string password = 1;
+  common.IdentityType identity_type = 2;
+  string identity_value = 3;
+  string credential = 4;
+}
+
+message DeleteAccountResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// User 普通用户认证服务：所有接口以 organization 为边界
+service UserAuthHandler {
+  rpc Login(LoginRequest) returns(LoginResponse) {
+    option (api.post) = "/api/v1/user/auth/login";
+  }
+
+  rpc Register(RegisterRequest) returns(LoginResponse) {
+    option (api.post) = "/api/v1/user/auth/register";
+  }
+
+  rpc RefreshToken(RefreshTokenRequest) returns(LoginResponse) {
+    option (api.post) = "/api/v1/user/auth/refresh-token";
+  }
+
+  rpc Logout(LogoutRequest) returns(LogoutResponse) {
+    option (api.post) = "/api/v1/user/auth/logout";
+  }
+
+  rpc ValidateToken(ValidateTokenRequest) returns(ValidateTokenResponse) {
+    option (api.post) = "/api/v1/user/auth/validate-token";
+  }
+
+  rpc ChangePassword(ChangePasswordRequest) returns(ChangePasswordResponse) {
+    option (api.post) = "/api/v1/user/auth/password/change";
+  }
+
+  rpc ResetPassword(ResetPasswordRequest) returns(ResetPasswordResponse) {
+    option (api.post) = "/api/v1/user/auth/password/reset";
+  }
+
+  rpc DeleteAccount(DeleteAccountRequest) returns(DeleteAccountResponse) {
+    option (api.post) = "/api/v1/user/auth/account/delete";
+  }
+}
+
+// ============================================================
+// 二、平台管理员认证 (Platform Account)
+//   使用平台账号凭证（email/phone + password）登录，不携带 organization_id/client_id；
+//   登录后依据 Organization Membership 决定可访问的 Organization，
+//   并通过 SwitchOrganization 换取绑定具体 Organization 的管理令牌。
+// ============================================================
+
+// 管理员登录：平台级凭证，不区分 Organization
+message AdminLoginRequest {
+  string email = 1 [(api.vd) = "$!=''"];
+  string phone = 2;
+  string password = 3 [(api.vd) = "$!=''"];
+  string device_id = 4;
+  string device_name = 5;
+}
+
+// 管理员登录/注册返回：平台账号 + 可管理的 Organization 列表 + 平台级令牌。
+// 平台级令牌尚未绑定 Organization：
+//   - 若只有一个 Organization，可直接据此 SwitchOrganization 进入 Console；
+//   - 若有多个 Organization，前端展示 Organization Selector 供选择。
+message AdminLoginResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  admin.AdminAccount account = 3[(api.go_tag)='json:"account"'];
+  repeated admin.AdminOrganization organizations = 4[(api.go_tag)='json:"organizations"'];
+  string access_token = 5[(api.go_tag)='json:"access_token"'];
+  string refresh_token = 6[(api.go_tag)='json:"refresh_token"'];
+  int64 access_token_expires_at = 7[(api.go_tag)='json:"access_token_expires_at"'];
+  int64 refresh_token_expires_at = 8[(api.go_tag)='json:"refresh_token_expires_at"'];
+}
+
+message AdminRefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message AdminLogoutRequest {
+  string session_id = 1;
+}
+
+message AdminLogoutResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message ValidateAdminTokenRequest {
+  string access_token = 1 [(api.body) = "access_token,required"];
+}
+
+message ValidateAdminTokenResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  bool valid = 3[(api.go_tag)='json:"valid"'];
+  AdminAuthContext context = 4[(api.go_tag)='json:"context"'];
+  int64 expires_at = 5[(api.go_tag)='json:"expires_at"'];
+}
+
+// 切换/选择 Organization：换取绑定该 Organization 的管理令牌，无需重新登录。
+// 权限只作用于所选 Organization，不会因归属其它 Organization 而越权。
+message SwitchOrganizationRequest {
+  int64 organization_id = 1 [(api.body) = "organization_id,required"];
+}
+
+message SwitchOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  string access_token = 3[(api.go_tag)='json:"access_token"'];
+  int64 access_token_expires_at = 4[(api.go_tag)='json:"access_token_expires_at"'];
+  AdminAuthContext context = 5[(api.go_tag)='json:"context"'];
+}
+
+// 平台管理员认证服务：基于 Platform Account，与 User 用户认证完全隔离
+service AdminAuthHandler {
+  rpc AdminLogin(AdminLoginRequest) returns(AdminLoginResponse) {
+    option (api.post) = "/api/v1/admin/auth/login";
+  }
+
+  rpc AdminRefreshToken(AdminRefreshTokenRequest) returns(AdminLoginResponse) {
+    option (api.post) = "/api/v1/admin/auth/refresh-token";
+  }
+
+  rpc AdminLogout(AdminLogoutRequest) returns(AdminLogoutResponse) {
+    option (api.post) = "/api/v1/admin/auth/logout";
+  }
+
+  rpc ValidateAdminToken(ValidateAdminTokenRequest) returns(ValidateAdminTokenResponse) {
+    option (api.post) = "/api/v1/admin/auth/validate-token";
+  }
+
+  rpc SwitchOrganization(SwitchOrganizationRequest) returns(SwitchOrganizationResponse) {
+    option (api.post) = "/api/v1/admin/auth/switch-organization";
+  }
+}

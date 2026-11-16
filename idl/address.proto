@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package address;
+
+import "api.proto";
+
+option go_package = "address";
+
+// UserAddress 是 Organization User 地址簿里的一条收货地址。每个用户最多 10 条，
+// 且恰有一条 is_default = true。归属由鉴权上下文决定，请求体不携带 user_id。
+message UserAddress {
+  int64 id = 1 [(api.go_tag)='json:"id"'];
+  string receiver_name = 2 [(api.go_tag)='json:"receiver_name"'];
+  string receiver_phone = 3 [(api.go_tag)='json:"receiver_phone"'];
+  string province = 4 [(api.go_tag)='json:"province"'];
+  string city = 5 [(api.go_tag)='json:"city"'];
+  string district = 6 [(api.go_tag)='json:"district"'];
+  string detail = 7 [(api.go_tag)='json:"detail"'];
+  bool is_default = 8 [(api.go_tag)='json:"is_default"'];
+  int64 created_at = 9 [(api.go_tag)='json:"created_at"'];
+  int64 updated_at = 10 [(api.go_tag)='json:"updated_at"'];
+}
+
+message ListAddressesRequest {}
+
+message ListAddressesResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated UserAddress addresses = 3[(api.go_tag)='json:"addresses"'];
+}
+
+message CreateAddressRequest {
+  string receiver_name = 1 [(api.vd) = "$!=''"];
+  string receiver_phone = 2 [(api.vd) = "$!=''"];
+  string province = 3;
+  string city = 4;
+  string district = 5;
+  string detail = 6 [(api.vd) = "$!=''"];
+  // 设为默认地址（首条地址会自动成为默认，无需显式设置）。
+  bool is_default = 7;
+}
+
+message AddressResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  UserAddress address = 3[(api.go_tag)='json:"address"'];
+}
+
+message UpdateAddressRequest {
+  int64 address_id = 1 [(api.path) = "address_id", (api.vd) = "$!=''"];
+  string receiver_name = 2;
+  string receiver_phone = 3;
+  string province = 4;
+  string city = 5;
+  string district = 6;
+  string detail = 7;
+  bool is_default = 8;
+}
+
+message DeleteAddressRequest {
+  int64 address_id = 1 [(api.path) = "address_id", (api.vd) = "$!=''"];
+}
+
+message SetDefaultAddressRequest {
+  int64 address_id = 1 [(api.path) = "address_id", (api.vd) = "$!=''"];
+}
+
+message SimpleResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// 普通用户地址簿服务（Organization User）。归属取自鉴权上下文。
+service AddressHandler {
+  rpc ListAddresses(ListAddressesRequest) returns(ListAddressesResponse) {
+    option (api.get) = "/api/v1/user/addresses";
+  }
+  rpc CreateAddress(CreateAddressRequest) returns(AddressResponse) {
+    option (api.post) = "/api/v1/user/addresses";
+  }
+  rpc UpdateAddress(UpdateAddressRequest) returns(AddressResponse) {
+    option (api.put) = "/api/v1/user/addresses/:address_id";
+  }
+  rpc DeleteAddress(DeleteAddressRequest) returns(SimpleResponse) {
+    option (api.delete) = "/api/v1/user/addresses/:address_id";
+  }
+  rpc SetDefaultAddress(SetDefaultAddressRequest) returns(SimpleResponse) {
+    option (api.put) = "/api/v1/user/addresses/:address_id/default";
+  }
+}
+
+// 管理端地址簿管理请求。目标组织与目标用户来自路径参数，由 admin 鉴权与
+// 组织隔离边界校验（请求体不携带 user_id/organization_id）。
+
+message AdminListAddressesRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.path) = "user_id", (api.vd) = "$!=''"];
+}
+
+message AdminCreateAddressRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.path) = "user_id", (api.vd) = "$!=''"];
+  string receiver_name = 3 [(api.vd) = "$!=''"];
+  string receiver_phone = 4 [(api.vd) = "$!=''"];
+  string province = 5;
+  string city = 6;
+  string district = 7;
+  string detail = 8 [(api.vd) = "$!=''"];
+  bool is_default = 9;
+}
+
+message AdminUpdateAddressRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.path) = "user_id", (api.vd) = "$!=''"];
+  int64 address_id = 3 [(api.path) = "address_id", (api.vd) = "$!=''"];
+  string receiver_name = 4;
+  string receiver_phone = 5;
+  string province = 6;
+  string city = 7;
+  string district = 8;
+  string detail = 9;
+  bool is_default = 10;
+}
+
+message AdminDeleteAddressRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.path) = "user_id", (api.vd) = "$!=''"];
+  int64 address_id = 3 [(api.path) = "address_id", (api.vd) = "$!=''"];
+}
+
+message AdminSetDefaultAddressRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  int64 user_id = 2 [(api.path) = "user_id", (api.vd) = "$!=''"];
+  int64 address_id = 3 [(api.path) = "address_id", (api.vd) = "$!=''"];
+}
+
+// 管理端地址簿管理服务（跨用户）。组织与目标用户来自路径参数，走 admin 会话
+// 鉴权 + RBAC，并校验目标用户属于该管理员所在组织。
+service AddressManagementHandler {
+  rpc ListAddressesManagement(AdminListAddressesRequest) returns(ListAddressesResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/users/:user_id/addresses";
+  }
+  rpc CreateAddressManagement(AdminCreateAddressRequest) returns(AddressResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/users/:user_id/addresses";
+  }
+  rpc UpdateAddressManagement(AdminUpdateAddressRequest) returns(AddressResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/users/:user_id/addresses/:address_id";
+  }
+  rpc DeleteAddressManagement(AdminDeleteAddressRequest) returns(SimpleResponse) {
+    option (api.delete) = "/api/v1/admin/organizations/:organization_id/users/:user_id/addresses/:address_id";
+  }
+  rpc SetDefaultAddressManagement(AdminSetDefaultAddressRequest) returns(SimpleResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/users/:user_id/addresses/:address_id/default";
+  }
+}

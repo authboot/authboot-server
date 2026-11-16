@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package invitation;
+
+import "api.proto";
+import "membership.proto";
+
+option go_package = "invitation";
+
+enum InvitationStatus {
+  INVITATION_STATUS_UNKNOWN = 0;
+  INVITATION_STATUS_PENDING = 1;
+  INVITATION_STATUS_ACCEPTED = 2;
+  INVITATION_STATUS_EXPIRED = 3;
+  INVITATION_STATUS_REVOKED = 4;
+}
+
+message OrganizationInvitation {
+  int64 id = 1;
+  int64 organization_id = 2;
+  string email = 3;
+  int64 inviter_account_id = 6;
+  InvitationStatus status = 7;
+  int64 expired_at = 8;
+  int64 accepted_account_id = 9;
+  int64 created_at = 10;
+  int64 updated_at = 11;
+}
+
+message InviteAdminRequest {
+  int64 organization_id = 1[(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string email = 2[(api.vd) = "$!=''"];
+}
+
+message InviteAdminResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  OrganizationInvitation invitation = 3[(api.go_tag)='json:"invitation"'];
+}
+
+message GetInvitationRequest {
+  int64 invitation_id = 1;
+}
+
+message GetInvitationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  OrganizationInvitation invitation = 3[(api.go_tag)='json:"invitation"'];
+}
+
+message ListInvitationsRequest {
+  int64 organization_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListInvitationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated OrganizationInvitation invitations = 3[(api.go_tag)='json:"invitations"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+message AcceptInvitationRequest {
+  string token = 1;
+}
+
+message AcceptInvitationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  membership.OrganizationMembership membership = 3[(api.go_tag)='json:"membership"'];
+}
+
+message RevokeInvitationRequest {
+  int64 invitation_id = 1;
+}
+
+message RevokeInvitationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+service InvitationHandler {
+  rpc InviteAdmin(InviteAdminRequest) returns(InviteAdminResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/invitations";
+  }
+
+  rpc GetInvitation(GetInvitationRequest) returns(GetInvitationResponse) {
+    option (api.get) = "/api/v1/admin/invitations/:invitation_id";
+  }
+
+  rpc ListInvitations(ListInvitationsRequest) returns(ListInvitationsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/invitations";
+  }
+
+  // 特例：由被邀请人调用，凭邀请 token 鉴权（此时可能尚无 Platform Account），
+  // 因此不放在 /api/v1/admin/* 下，走独立的公开/token 校验路径。
+  rpc AcceptInvitation(AcceptInvitationRequest) returns(AcceptInvitationResponse) {
+    option (api.post) = "/api/v1/invitations/accept";
+  }
+
+  rpc RevokeInvitation(RevokeInvitationRequest) returns(RevokeInvitationResponse) {
+    option (api.delete) = "/api/v1/admin/invitations/:invitation_id";
+  }
+}

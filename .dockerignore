@@ -1,0 +1,9 @@
+# 缩小构建上下文，避免密钥/产物/日志进入镜像层
+.git
+.vscode
+.idea
+output
+hlog
+pkg/data
+*.log
+.env

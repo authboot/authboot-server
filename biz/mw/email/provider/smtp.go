@@ -1,0 +1,146 @@
+/*
+ * Copyright 2023 CloudWeGo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package provider
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
+	"net/smtp"
+	"time"
+)
+
+// SMTPConfig holds the connection parameters for the SMTP adapter.
+type SMTPConfig struct {
+	Host     string // SMTP server host, e.g. smtp.gmail.com
+	Port     int    // SMTP server port, e.g. 587 (STARTTLS) or 465 (implicit TLS)
+	Username string // auth username; empty disables AUTH
+	Password string // auth password / app token
+	From     string // default From address used when Message.From is empty
+	// UseTLS forces an implicit TLS connection on dial (typically port 465).
+	// When false the adapter dials plaintext and upgrades via STARTTLS if the
+	// server advertises it (typically port 587).
+	UseTLS bool
+	// Timeout bounds the whole dial + send cycle.
+	Timeout time.Duration
+}
+
+// smtpSender is the net/smtp based implementation of Sender.
+type smtpSender struct {
+	cfg SMTPConfig
+}
+
+// NewSMTPSender builds an SMTP-backed Sender.
+func NewSMTPSender(cfg SMTPConfig) Sender {
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 10 * time.Second
+	}
+	return &smtpSender{cfg: cfg}
+}
+
+func (s *smtpSender) Name() string { return "smtp" }
+
+func (s *smtpSender) Send(ctx context.Context, msg *Message) error {
+	if err := msg.validate(); err != nil {
+		return err
+	}
+
+	from := msg.From
+	if from == "" {
+		from = s.cfg.From
+	}
+	if from == "" {
+		return fmt.Errorf("email/smtp: no From address (set Message.From or SMTPConfig.From)")
+	}
+
+	payload := msg.buildMIME(from)
+	addr := net.JoinHostPort(s.cfg.Host, fmt.Sprintf("%d", s.cfg.Port))
+
+	// Honor ctx: cap the operation with a deadline derived from ctx or Timeout.
+	deadline := time.Now().Add(s.cfg.Timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+
+	client, err := s.dial(addr, deadline)
+	if err != nil {
+		return fmt.Errorf("email/smtp: dial %s: %w", addr, err)
+	}
+	defer client.Close()
+
+	// Upgrade to TLS via STARTTLS when not already on an implicit-TLS socket.
+	if !s.cfg.UseTLS {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(&tls.Config{ServerName: s.cfg.Host}); err != nil {
+				return fmt.Errorf("email/smtp: starttls: %w", err)
+			}
+		}
+	}
+
+	// Authenticate when credentials are provided.
+	if s.cfg.Username != "" {
+		auth := smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host)
+		if ok, _ := client.Extension("AUTH"); ok {
+			if err := client.Auth(auth); err != nil {
+				return fmt.Errorf("email/smtp: auth: %w", err)
+			}
+		}
+	}
+
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("email/smtp: MAIL FROM: %w", err)
+	}
+	for _, rcpt := range msg.allRecipients() {
+		if err := client.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("email/smtp: RCPT TO %s: %w", rcpt, err)
+		}
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("email/smtp: DATA: %w", err)
+	}
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("email/smtp: write body: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("email/smtp: close body: %w", err)
+	}
+
+	return client.Quit()
+}
+
+// dial opens an SMTP client, using an implicit TLS socket when UseTLS is set.
+func (s *smtpSender) dial(addr string, deadline time.Time) (*smtp.Client, error) {
+	netDialer := &net.Dialer{Deadline: deadline}
+
+	if s.cfg.UseTLS {
+		conn, err := tls.DialWithDialer(netDialer, "tcp", addr, &tls.Config{ServerName: s.cfg.Host})
+		if err != nil {
+			return nil, err
+		}
+		return smtp.NewClient(conn, s.cfg.Host)
+	}
+
+	conn, err := netDialer.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	_ = conn.SetDeadline(deadline)
+	return smtp.NewClient(conn, s.cfg.Host)
+}

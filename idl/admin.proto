@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package admin;
+
+import "api.proto";
+import "common.proto";
+
+option go_package = "admin";
+
+// ============================================================
+// 平台管理员自服务（当前登录管理员）。
+// 注意：Platform Admin 与 Organization User 是两套独立身份，禁止混用；
+// 本文件的接口一律由 AdminSessionAuth 守卫，只接受管理员 token。
+// ============================================================
+
+// 平台管理员账号（只读视图）。email 是唯一登录标识。
+message AdminAccount {
+  int64 id = 1 [(api.go_tag)='json:"id"'];
+  string email = 2 [(api.go_tag)='json:"email"'];
+  string nickname = 3 [(api.go_tag)='json:"nickname"'];
+  string avatar = 4 [(api.go_tag)='json:"avatar"'];
+  string background_image = 5 [(api.go_tag)='json:"background_image"'];
+  string signature = 6 [(api.go_tag)='json:"signature"'];
+  common.Status status = 7 [(api.go_tag)='json:"status"'];
+  int64 created_at = 8 [(api.go_tag)='json:"created_at"'];
+  int64 updated_at = 9 [(api.go_tag)='json:"updated_at"'];
+}
+
+// 管理员可管理的组织（登录响应 / 自服务列表使用）。
+message AdminOrganization {
+  int64 organization_id = 1 [(api.go_tag)='json:"organization_id"'];
+  string organization_name = 2 [(api.go_tag)='json:"organization_name"'];
+  int64 membership_id = 3 [(api.go_tag)='json:"membership_id"'];
+  common.Status status = 7 [(api.go_tag)='json:"status"'];
+}
+
+// ---- 自己的资料 ----
+
+message GetMyProfileRequest {}
+
+message GetMyProfileResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  AdminAccount profile = 3[(api.go_tag)='json:"profile"'];
+}
+
+message UpdateMyProfileRequest {
+  string nickname = 1;
+  string avatar = 2;
+  string background_image = 3;
+  string signature = 4;
+}
+
+message UpdateMyProfileResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  AdminAccount profile = 3[(api.go_tag)='json:"profile"'];
+}
+
+// ---- 偏好设置（通用键值对，JSON 存储，新增偏好无需改表结构）----
+
+message GetMySettingsRequest {}
+
+message GetMySettingsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  map<string, string> settings = 3[(api.go_tag)='json:"settings"'];
+}
+
+message UpdateMySettingsRequest {
+  map<string, string> settings = 1;
+}
+
+message UpdateMySettingsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  map<string, string> settings = 3[(api.go_tag)='json:"settings"'];
+}
+
+// 管理员自服务接口：身份一律取自 token，不接收 account_id。
+service AdminUserHandler {
+  rpc GetMyProfile(GetMyProfileRequest) returns(GetMyProfileResponse) {
+    option (api.get) = "/api/v1/admin/me";
+  }
+
+  rpc UpdateMyProfile(UpdateMyProfileRequest) returns(UpdateMyProfileResponse) {
+    option (api.put) = "/api/v1/admin/me";
+  }
+
+  rpc GetMySettings(GetMySettingsRequest) returns(GetMySettingsResponse) {
+    option (api.get) = "/api/v1/admin/me/settings";
+  }
+
+  rpc UpdateMySettings(UpdateMySettingsRequest) returns(UpdateMySettingsResponse) {
+    option (api.put) = "/api/v1/admin/me/settings";
+  }
+}

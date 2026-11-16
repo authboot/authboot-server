@@ -1,0 +1,118 @@
+# 一条命令拉起整套环境：docker compose up -d --build
+#
+# 应用使用 host 网络，连接地址与 .env 对应：
+#   mysql  localhost:8681   root/root，库 slef
+#   redis  localhost:6379   无密码
+#   minio  localhost:8998   minioadmin/Baidu@2026（控制台 8999）
+#
+# 需要 8681 / 6379 / 8998 / 8999 / 8888 空闲；宿主机原有的
+# mysql / redis / aistor-server 容器已移除，避免端口和重名冲突。
+#
+# 数据卷由 compose 管理（实际名称带项目前缀，如 auth-server_mysql_data）：
+# 空卷首次启动时自动导入 pkg/configs/sql/init.sql（表结构 + 导出时的数据），
+# 之后重建容器不会重复导入。
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      # 应用使用 host 网络，经宿主端口连入时源 IP 不是 localhost，需要 root@'%'
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: slef
+    ports:
+      - "8681:3306"
+    volumes:
+      # 数据卷为空时才会执行初始化脚本，重建容器不会重复导入
+      - mysql_data:/var/lib/mysql
+      - ./pkg/configs/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    # 只监听本机，避免 Redis 暴露到公网
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: always
+
+  minio:
+    # 与宿主机现有 minio 部署保持一致：AIStor 镜像 + license 文件
+    # （当前网络无法访问 Docker Hub，社区版 minio/minio 拉不下来）
+    image: quay.io/minio/aistor/minio:latest
+    container_name: minio
+    command: ["server", "/data", "--console-address", ":9001", "--license", "/minio.license"]
+    environment:
+      # 复用 .env 里的 MinIO 账号，避免两处维护
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY_ID}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_ACCESS_KEY}"
+    ports:
+      - "8998:9000" # S3 API，对应 .env 的 MINIO_ENDPOINT
+      - "8999:9001" # 控制台
+    volumes:
+      - minio_data:/data
+      # license 路径可用 MINIO_LICENSE_FILE 覆盖，默认沿用宿主机已有部署
+      - "${MINIO_LICENSE_FILE:-/media/ssd1/v_chenpeng20/minio/minio.license}:/minio.license:ro"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: always
+
+  authboot-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: authboot-server:latest
+    container_name: authboot-server
+    env_file:
+      - .env
+    # 镜像内以非 root 用户运行，这里对齐宿主机日志目录属主，保证能写 ./hlog/logs
+    user: "${APP_UID:-1007}:${APP_GID:-1007}"
+    # .env 中 REDIS_ADDR=localhost:6379，且 redis 只监听宿主 127.0.0.1，
+    # 因此应用必须使用 host 网络，才能同时访问 mysql / redis / minio。
+    network_mode: host
+    volumes:
+      # 日志按 ./hlog/logs/<date>.log 落盘，挂载出来便于查看与保留
+      - ./hlog:/app/hlog
+      # 运行期要读 pkg/configs/casbin/model.conf（镜像内未打包，直接从源码目录挂载）
+      - ./pkg/configs:/app/pkg/configs:ro
+    # 等依赖真正可用后再启动应用
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:

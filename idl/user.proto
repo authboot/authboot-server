@@ -1,0 +1,295 @@
+syntax = "proto3";
+
+package user;
+
+import "api.proto";
+import "common.proto";
+
+option go_package = "user";
+
+message User {
+  int64 id = 1;
+  int64 organization_id = 2;
+  string nickname = 3;
+  string avatar = 4;
+  common.Status status = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+  // 管理端可见的档案与联系信息（不含 password / settings 等敏感字段）。
+  // email/phone 取自 tb_user_identities 绑定身份，非独立列。
+  common.Gender gender = 8;
+  string birthday = 9;
+  string bio = 10;
+  string background_image = 11;
+  string signature = 12;
+  string email = 13;
+  string phone = 14;
+}
+
+message UserIdentity {
+  int64 id = 1;
+  int64 organization_id = 2;
+  int64 user_id = 3;
+  common.IdentityType identity_type = 4;
+  string identity_value = 5;
+  bool verified = 6;
+  int64 created_at = 7;
+  int64 updated_at = 8;
+}
+
+message UserProfile {
+  int64 user_id = 1;
+  int64 organization_id = 2;
+  string nickname = 3;
+  string avatar = 4;
+  common.Gender gender = 5;
+  string birthday = 6;
+  string bio = 7;
+}
+
+message GetUserRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+}
+
+message GetUserResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  User user = 3[(api.go_tag)='json:"user"'];
+}
+
+message GetUserByIdentityRequest {
+  int64 organization_id = 1;
+  common.IdentityType identity_type = 2;
+  string identity_value = 3;
+}
+
+message GetUserByIdentityResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  User user = 3[(api.go_tag)='json:"user"'];
+}
+
+message ListUsersRequest {
+  int64 organization_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListUsersResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated User users = 3[(api.go_tag)='json:"users"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+message UpdateUserRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+  string nickname = 3;
+  string avatar = 4;
+  common.Gender gender = 5;
+  string birthday = 6;
+  string bio = 7;
+}
+
+message UpdateUserResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  User user = 3[(api.go_tag)='json:"user"'];
+}
+
+message DisableUserRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+}
+
+message DisableUserResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message EnableUserRequest {
+  int64 organization_id = 1;
+  int64 user_id = 2;
+}
+
+message EnableUserResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// UserManagementHandler is the admin-side management API for an organization's
+// end users (list / lookup / update / disable). All routes live under
+// /api/v1/admin/... and take organization_id + user_id from the path.
+service UserManagementHandler {
+  rpc GetUser(GetUserRequest) returns(GetUserResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/users/:user_id";
+  }
+
+  rpc GetUserByIdentity(GetUserByIdentityRequest) returns(GetUserByIdentityResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/users/by-identity";
+  }
+
+  rpc ListUsers(ListUsersRequest) returns(ListUsersResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/users";
+  }
+
+  rpc UpdateUser(UpdateUserRequest) returns(UpdateUserResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/users/:user_id";
+  }
+
+  rpc DisableUser(DisableUserRequest) returns(DisableUserResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/users/:user_id/disable";
+  }
+
+  rpc EnableUser(EnableUserRequest) returns(EnableUserResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/users/:user_id/enable";
+  }
+}
+
+// --- self-service (end user operating on their own account) -----------------
+// These carry NO organization_id / user_id: the identity is taken from the
+// authenticated user token, so a user can only ever read / modify themselves.
+
+message GetMyProfileRequest {}
+
+message GetMyProfileResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  UserProfile profile = 3[(api.go_tag)='json:"profile"'];
+}
+
+message UpdateMyProfileRequest {
+  string nickname = 1;
+  string avatar = 2;
+  common.Gender gender = 3;
+  string birthday = 4;
+  string bio = 5;
+}
+
+message UpdateMyProfileResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  UserProfile profile = 3[(api.go_tag)='json:"profile"'];
+}
+
+// BindIdentityRequest binds a login identity to the authenticated user.
+// credential proves ownership of the identity being bound:
+//   - email / phone : a verification code sent to that contact (bind scene)
+//   - wechat         : a fresh OAuth authorization code (re-authorization)
+// When the identity is already bound to ANOTHER account, the bind becomes a
+// conflict-driven merge: with confirm_merge=true the other account is merged
+// into the current one (its ownership is proven by the same credential).
+message BindIdentityRequest {
+  common.IdentityType identity_type = 1;
+  string identity_value = 2;
+  string credential = 3;
+  bool confirm_merge = 4;
+}
+
+message BindIdentityResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  UserIdentity identity = 3[(api.go_tag)='json:"identity"'];
+  // merged is true when this bind triggered a conflict-driven account merge
+  // (the identity was owned by another account which got merged into this one).
+  bool merged = 4[(api.go_tag)='json:"merged"'];
+  // Fresh token pair for the surviving account when merged=true: the merge
+  // revokes every old session and re-issues a new one so the current client
+  // does not have to log in again. Empty otherwise.
+  string access_token = 5[(api.go_tag)='json:"access_token"'];
+  string refresh_token = 6[(api.go_tag)='json:"refresh_token"'];
+  int64 access_token_expires_at = 7[(api.go_tag)='json:"access_token_expires_at"'];
+  int64 refresh_token_expires_at = 8[(api.go_tag)='json:"refresh_token_expires_at"'];
+}
+
+message UnbindIdentityRequest {
+  common.IdentityType identity_type = 1;
+  // identity_value narrows the unbind to one specific value; when empty, every
+  // identity of that type is unbound. The user must keep at least one login
+  // identity — unbinding the last one is rejected.
+  string identity_value = 2;
+}
+
+message UnbindIdentityResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message ListMyIdentitiesRequest {}
+
+message ListMyIdentitiesResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated UserIdentity identities = 3[(api.go_tag)='json:"identities"'];
+}
+
+// ---- 普通用户账号合并（仅 App 用户，管理员不支持）--------------------
+// PrepareMergeRequest names the account the caller wants to merge INTO their
+// current (authenticated) account. The caller must prove ownership of the
+// target account via a verification code sent to its bound phone/email.
+message PrepareMergeRequest {
+  int64 account_id = 1;
+}
+
+message PrepareMergeResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  string masked_contact = 3[(api.go_tag)='json:"masked_contact"'];
+  int32 expire_seconds = 4[(api.go_tag)='json:"expire_seconds"'];
+  int32 retry_after_seconds = 5[(api.go_tag)='json:"retry_after_seconds"'];
+}
+
+message MergeAccountRequest {
+  int64 account_id = 1;
+  string code = 2;
+}
+
+message MergeAccountResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  // Fresh token pair for the surviving account: the merge revokes every old
+  // session, and a new one is re-issued so the current client does not have to
+  // log in again. Empty when re-issue failed (client should re-login).
+  string access_token = 3[(api.go_tag)='json:"access_token"'];
+  string refresh_token = 4[(api.go_tag)='json:"refresh_token"'];
+  int64 access_token_expires_at = 5[(api.go_tag)='json:"access_token_expires_at"'];
+  int64 refresh_token_expires_at = 6[(api.go_tag)='json:"refresh_token_expires_at"'];
+}
+
+// IdentityHandler manages the identities bound to the authenticated user
+// (phone / email / OAuth). Routes live under /api/v1/user/identities...
+service IdentityHandler {
+  rpc BindIdentity(BindIdentityRequest) returns(BindIdentityResponse) {
+    option (api.post) = "/api/v1/user/identities/bind";
+  }
+
+  rpc UnbindIdentity(UnbindIdentityRequest) returns(UnbindIdentityResponse) {
+    option (api.post) = "/api/v1/user/identities/:identity_type/unbind";
+  }
+
+  rpc ListMyIdentities(ListMyIdentitiesRequest) returns(ListMyIdentitiesResponse) {
+    option (api.get) = "/api/v1/user/identities";
+  }
+}
+
+// UserHandler is the self-service API: an authenticated end user reading and
+// updating their own profile. Routes live under /api/v1/user/...
+service UserHandler {
+  rpc GetMyProfile(GetMyProfileRequest) returns(GetMyProfileResponse) {
+    option (api.get) = "/api/v1/user/profile";
+  }
+
+  rpc UpdateMyProfile(UpdateMyProfileRequest) returns(UpdateMyProfileResponse) {
+    option (api.put) = "/api/v1/user/profile";
+  }
+
+  rpc PrepareMerge(PrepareMergeRequest) returns(PrepareMergeResponse) {
+    option (api.post) = "/api/v1/user/account/merge/prepare";
+  }
+
+  rpc MergeAccount(MergeAccountRequest) returns(MergeAccountResponse) {
+    option (api.post) = "/api/v1/user/account/merge";
+  }
+}

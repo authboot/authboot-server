@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package dashboard;
+
+import "api.proto";
+
+option go_package = "dashboard";
+
+// 趋势点：某天的计数（date 为 YYYY-MM-DD）。
+message TrendPoint {
+  string date = 1 [(api.go_tag)='json:"date"'];
+  int64 count = 2 [(api.go_tag)='json:"count"'];
+}
+
+// 月度登录趋势点（month 为 YYYY-MM），用于 Dashboard 双序列折线图。
+message MonthlyLoginTrend {
+  string month = 1 [(api.go_tag)='json:"month"'];
+  int64 success = 2 [(api.go_tag)='json:"success"'];
+  int64 failed = 3 [(api.go_tag)='json:"failed"'];
+}
+
+// Dashboard 右侧「最新注册用户」列表项。
+message RecentUser {
+  int64 user_id = 1 [(api.go_tag)='json:"user_id"'];
+  string nickname = 2 [(api.go_tag)='json:"nickname"'];
+  string avatar = 3 [(api.go_tag)='json:"avatar"'];
+  // identity 是脱敏后的邮箱/手机（如 al***@x.com、138****1234）；
+  // 未绑定联系方式的账号为空。
+  string identity = 4 [(api.go_tag)='json:"identity"'];
+  int64 created_at = 5 [(api.go_tag)='json:"created_at"'];
+}
+
+// 组织维度管理后台 Dashboard。
+message OrgDashboardRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message OrgDashboardResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  int64 total_users = 3[(api.go_tag)='json:"total_users"'];
+  int64 today_new_users = 4[(api.go_tag)='json:"today_new_users"'];
+  int64 active_users_7d = 5[(api.go_tag)='json:"active_users_7d"'];
+  int64 disabled_users = 6[(api.go_tag)='json:"disabled_users"'];
+  int64 admin_count = 7[(api.go_tag)='json:"admin_count"'];
+  int64 today_logins = 8[(api.go_tag)='json:"today_logins"'];
+  int64 today_failed_logins = 9[(api.go_tag)='json:"today_failed_logins"'];
+  repeated TrendPoint login_trend_7d = 10[(api.go_tag)='json:"login_trend_7d"'];
+  repeated TrendPoint new_user_trend_7d = 11[(api.go_tag)='json:"new_user_trend_7d"'];
+
+  // ---- Dashboard 首屏 KPI 卡（当前自然月 vs 上一个自然月）----
+  int64 new_users_this_month = 12[(api.go_tag)='json:"new_users_this_month"'];
+  double new_users_delta_pct = 13[(api.go_tag)='json:"new_users_delta_pct"'];
+  int64 active_users_this_month = 14[(api.go_tag)='json:"active_users_this_month"'];
+  double active_users_delta_pct = 15[(api.go_tag)='json:"active_users_delta_pct"'];
+  double total_users_delta_pct = 16[(api.go_tag)='json:"total_users_delta_pct"'];
+  // 登录成功率（百分比 0-100，保留一位小数）及其与上月的差值（百分点）。
+  double login_success_rate = 17[(api.go_tag)='json:"login_success_rate"'];
+  double login_success_rate_delta = 18[(api.go_tag)='json:"login_success_rate_delta"'];
+  // 近 6 个月（含本月）登录成功/失败趋势，用于双序列折线图。
+  repeated MonthlyLoginTrend monthly_login_trend = 19[(api.go_tag)='json:"monthly_login_trend"'];
+  // 最新注册用户（默认 5 条），用于右侧列表。
+  repeated RecentUser recent_users = 20[(api.go_tag)='json:"recent_users"'];
+}
+
+// 平台维度管理后台 Dashboard。
+message PlatformDashboardRequest {}
+
+message PlatformDashboardResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  int64 organization_count = 3[(api.go_tag)='json:"organization_count"'];
+  int64 user_count = 4[(api.go_tag)='json:"user_count"'];
+  int64 admin_count = 5[(api.go_tag)='json:"admin_count"'];
+  int64 audit_log_count = 6[(api.go_tag)='json:"audit_log_count"'];
+  int64 today_login_count = 7[(api.go_tag)='json:"today_login_count"'];
+  int64 today_new_users = 8[(api.go_tag)='json:"today_new_users"'];
+}
+
+service DashboardHandler {
+  rpc OrgDashboard(OrgDashboardRequest) returns(OrgDashboardResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/dashboard";
+  }
+
+  rpc PlatformDashboard(PlatformDashboardRequest) returns(PlatformDashboardResponse) {
+    option (api.get) = "/api/v1/admin/dashboard";
+  }
+}

@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package organization;
+
+import "api.proto";
+import "common.proto";
+
+option go_package = "organization";
+
+message Organization {
+  int64 id = 1;
+  string name = 2;
+  string code = 3;
+  string logo = 4;
+  common.Status status = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+}
+
+message CreateOrganizationRequest {
+  string name = 1 [(api.vd) = "$!=''"];
+  string code = 2 [(api.vd) = "$!=''"];
+  string logo = 3;
+}
+
+message CreateOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Organization organization = 3[(api.go_tag)='json:"organization"'];
+}
+
+message GetOrganizationRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message GetOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Organization organization = 3[(api.go_tag)='json:"organization"'];
+}
+
+message UpdateOrganizationRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string name = 2;
+  string code = 3;
+  string logo = 4;
+  common.Status status = 5;
+}
+
+message UpdateOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  Organization organization = 3[(api.go_tag)='json:"organization"'];
+}
+
+message DeleteOrganizationRequest {
+  int64 organization_id = 1;
+}
+
+message DeleteOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+message ListOrganizationsRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message ListOrganizationsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated Organization organizations = 3[(api.go_tag)='json:"organizations"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
+// 上传 / 更改组织 logo。图片文件通过 multipart/form-data 上传，
+// 表单字段名为 logo，由 handler 通过 c.FormFile("logo") 读取，
+// 因此请求体本身只携带路径参数。
+message UploadOrganizationLogoRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  bytes data = 2 [(api.form) = "data"];
+}
+
+message UploadOrganizationLogoResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  // 上传后的 logo 访问地址
+  string logo = 3[(api.go_tag)='json:"logo"'];
+  Organization organization = 4[(api.go_tag)='json:"organization"'];
+}
+
+// 离开组织。操作者身份取自鉴权上下文（JWT），无需在请求体中携带账号 id。
+message LeaveOrganizationRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message LeaveOrganizationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+}
+
+// ============================================================
+// 组织设置（Organization Settings）
+//   管理端可配置：admin 登录 token 有效时长、组织下普通用户可用的登录方式等。
+//   注意：hz codegen 暂不可用，biz/model/organization/settings.go 手工维护，
+//   与下方 message 保持一致；跑通 hz update 后可删除手工 DTO。
+// ============================================================
+
+// 组织设置：admin_token_ttl_seconds 为 0 表示使用全局默认值。
+// 字段显式声明 json tag（不带 omitempty），保证设置接口始终返回完整状态。
+message OrganizationSettings {
+  int64 admin_token_ttl_seconds = 1[(api.go_tag)='json:"admin_token_ttl_seconds"'];
+  LoginMethods login_methods = 2[(api.go_tag)='json:"login_methods"'];
+}
+
+// 组织下普通用户（非 admin）可用的登录方式开关
+message LoginMethods {
+  bool email_password = 1[(api.go_tag)='json:"email_password"'];             // 邮箱 + 密码
+  bool email_code = 2[(api.go_tag)='json:"email_code"'];                     // 邮箱验证码
+  bool phone_code = 3[(api.go_tag)='json:"phone_code"'];                     // 手机验证码
+  repeated string oauth_providers = 4[(api.go_tag)='json:"oauth_providers"']; // 允许的三方登录提供商（wechat/google/apple/github/alipay）
+}
+
+message GetOrganizationSettingsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message GetOrganizationSettingsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  OrganizationSettings settings = 3[(api.go_tag)='json:"settings"'];
+}
+
+message UpdateOrganizationSettingsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  OrganizationSettings settings = 2[(api.go_tag)='json:"settings"'];
+}
+
+message UpdateOrganizationSettingsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  OrganizationSettings settings = 3[(api.go_tag)='json:"settings"'];
+}
+
+service OrganizationHandler {
+  rpc CreateOrganization(CreateOrganizationRequest) returns(CreateOrganizationResponse) {
+    option (api.post) = "/api/v1/admin/organizations";
+  }
+
+  rpc GetOrganization(GetOrganizationRequest) returns(GetOrganizationResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id";
+  }
+
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns(UpdateOrganizationResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id";
+  }
+
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns(DeleteOrganizationResponse) {
+    option (api.delete) = "/api/v1/admin/organizations/:organization_id";
+  }
+
+  rpc ListOrganizations(ListOrganizationsRequest) returns(ListOrganizationsResponse) {
+    option (api.get) = "/api/v1/admin/organizations";
+  }
+
+  // 上传 / 更改组织 logo（multipart/form-data，文件字段名 logo）
+  rpc UploadOrganizationLogo(UploadOrganizationLogoRequest) returns(UploadOrganizationLogoResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/logo";
+  }
+
+  // 离开组织
+  rpc LeaveOrganization(LeaveOrganizationRequest) returns(LeaveOrganizationResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/leave";
+  }
+
+  // 查询组织设置
+  rpc GetOrganizationSettings(GetOrganizationSettingsRequest) returns(GetOrganizationSettingsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/settings";
+  }
+
+  // 整体替换组织设置
+  rpc UpdateOrganizationSettings(UpdateOrganizationSettingsRequest) returns(UpdateOrganizationSettingsResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/settings";
+  }
+}

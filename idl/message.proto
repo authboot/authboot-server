@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package message;
+
+import "api.proto";
+import "common.proto";
+
+option go_package = "message";
+
+enum CaptchaScene {
+  CAPTCHA_SCENE_UNKNOWN = 0;
+  CAPTCHA_SCENE_LOGIN = 1;
+  CAPTCHA_SCENE_REGISTER = 2;
+  CAPTCHA_SCENE_BIND_MOBILE = 3;
+  CAPTCHA_SCENE_BIND_EMAIL = 4;
+  CAPTCHA_SCENE_RESET_PASSWORD = 5;
+}
+
+message CreateCaptchaRequest {
+  CaptchaScene scene = 1;
+}
+
+message CreateCaptchaResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  string captcha_id = 3[(api.go_tag)='json:"captcha_id"'];
+  string image_base64 = 4[(api.go_tag)='json:"image_base64"'];
+  int32 expire_seconds = 5[(api.go_tag)='json:"expire_seconds"'];
+}
+
+message VerifyCaptchaRequest {
+  string captcha_id = 1;
+  string answer = 2;
+  CaptchaScene scene = 3;
+}
+
+message VerifyCaptchaResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  string verify_token = 3[(api.go_tag)='json:"verify_token"'];
+  int32 expire_seconds = 4[(api.go_tag)='json:"expire_seconds"'];
+}
+
+enum MessageChannel {
+  MESSAGE_CHANNEL_UNKNOWN = 0;
+  MESSAGE_CHANNEL_SMS = 1;
+  MESSAGE_CHANNEL_EMAIL = 2;
+}
+
+enum MessageScene {
+  MESSAGE_SCENE_UNKNOWN = 0;
+  MESSAGE_SCENE_LOGIN = 1;
+  MESSAGE_SCENE_REGISTER = 2;
+  MESSAGE_SCENE_BIND_MOBILE = 3;
+  MESSAGE_SCENE_BIND_EMAIL = 4;
+  MESSAGE_SCENE_RESET_PASSWORD = 5;
+  MESSAGE_SCENE_DELETE_ACCOUNT = 6;
+}
+
+message SendCodeRequest {
+  int64 product_id = 1;
+  int64 client_id = 2;
+  MessageChannel channel = 3;
+  MessageScene scene = 4;
+  string target = 5;
+  string captcha_verify_token = 6;
+  string device_id = 7;
+}
+
+message SendCodeResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  int32 expire_seconds = 3[(api.go_tag)='json:"expire_seconds"'];
+  int32 retry_after_seconds = 4[(api.go_tag)='json:"retry_after_seconds"'];
+}
+
+service CaptchaHandler {
+  rpc CreateCaptcha(CreateCaptchaRequest) returns(CreateCaptchaResponse) {
+    option (api.get) = "/api/v1/captcha";
+  }
+
+  rpc VerifyCaptcha(VerifyCaptchaRequest) returns(VerifyCaptchaResponse) {
+    option (api.post) = "/api/v1/captcha/verify";
+  }
+}
+
+service MessageHandler {
+  rpc SendCode(SendCodeRequest) returns(SendCodeResponse) {
+    option (api.post) = "/api/v1/message/send-code";
+  }
+}
