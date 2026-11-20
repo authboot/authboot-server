@@ -4,6 +4,7 @@ package membership
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -37,6 +38,7 @@ func _membershipsMw() []app.HandlerFunc {
 func _removememberMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("member:delete"),
 	}
 }
 
@@ -46,7 +48,9 @@ func _membership_idMw() []app.HandlerFunc {
 }
 
 func _getmembershipMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("member:read"),
+	}
 }
 
 func _organizationsMw() []app.HandlerFunc {
@@ -60,5 +64,7 @@ func _organization_idMw() []app.HandlerFunc {
 }
 
 func _listmembersMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("member:read"),
+	}
 }

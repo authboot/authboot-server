@@ -3,6 +3,7 @@
 package audit
 
 import (
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -40,11 +41,13 @@ func _organization_idMw() []app.HandlerFunc {
 
 func _listauditlogsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("audit:read"),
 	}
 }
 
 func _listuserloginlogsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("audit:read"),
 	}
 }
 
@@ -55,5 +58,6 @@ func _user_login_logsMw() []app.HandlerFunc {
 
 func _abnormalloginsummaryMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("audit:read"),
 	}
 }

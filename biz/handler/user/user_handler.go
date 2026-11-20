@@ -12,6 +12,20 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
 
+// UploadMyAvatar accepts multipart/form-data with an avatar image.
+// @router /api/v1/user/profile/avatar [POST]
+func UploadMyAvatar(ctx context.Context, c *app.RequestContext) {
+	resp, err := service.NewUserService(ctx, c).UploadMyAvatar(&user.UploadMyAvatarRequest{})
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, user.UploadMyAvatarResponse{
+			Code: base.StatusCode, Message: base.StatusMsg,
+		})
+		return
+	}
+	c.JSON(consts.StatusOK, resp)
+}
+
 // GetMyProfile .
 // @router /api/v1/user/profile [GET]
 func GetMyProfile(ctx context.Context, c *app.RequestContext) {

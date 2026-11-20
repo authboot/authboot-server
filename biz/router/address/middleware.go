@@ -4,6 +4,7 @@ package address
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -92,30 +93,35 @@ func _user_idMw() []app.HandlerFunc {
 
 func _listaddressesmanagementMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("address:read"),
 	}
 }
 
 func _deleteaddressmanagementMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("address:delete"),
 	}
 }
 
 func _setdefaultaddressmanagementMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("address:update"),
 	}
 }
 
 func _updateaddressmanagementMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("address:update"),
 	}
 }
 
 func _createaddressmanagementMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("address:create"),
 	}
 }
 

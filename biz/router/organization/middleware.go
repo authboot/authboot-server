@@ -4,6 +4,7 @@ package organization
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -31,6 +32,7 @@ func _adminMw() []app.HandlerFunc {
 func _listorganizationsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
+		// casbin.RequirePlatform("organization:read"),
 	}
 }
 
@@ -43,6 +45,7 @@ func _createorganizationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequirePlatform("organization:create"),
 	}
 }
 
@@ -50,12 +53,14 @@ func _deleteorganizationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequirePlatform("organization:delete"),
 	}
 }
 
 func _getorganizationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
+		// casbin.RequireOrg("organization:read"),
 	}
 }
 
@@ -63,6 +68,7 @@ func _updateorganizationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequireOrg("organization:update"),
 	}
 }
 
@@ -75,6 +81,7 @@ func _leaveorganizationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		//casbin.RequireOrg("member:delete"),
 	}
 }
 
@@ -82,6 +89,7 @@ func _uploadorganizationlogoMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		//casbin.RequireOrg("organization:update"),
 	}
 }
 

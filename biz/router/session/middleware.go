@@ -4,6 +4,7 @@ package session
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -45,12 +46,15 @@ func _sessionsMw() []app.HandlerFunc {
 }
 
 func _listadminsessionsMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("session:read"),
+	}
 }
 
 func _revokealladminsessionsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("session:update"),
 	}
 }
 
@@ -65,12 +69,15 @@ func _session_idMw() []app.HandlerFunc {
 }
 
 func _getadminsessionMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("session:read"),
+	}
 }
 
 func _revokeadminsessionMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("session:update"),
 	}
 }
 
@@ -102,6 +109,7 @@ func _sessions1Mw() []app.HandlerFunc {
 func _listsessionsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
+		// casbin.RequireOrg("session:read"),
 	}
 }
 
@@ -109,6 +117,7 @@ func _revokeallsessionsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequireOrg("session:update"),
 	}
 }
 

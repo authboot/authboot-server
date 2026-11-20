@@ -6,8 +6,8 @@ import (
 	"context"
 	"strings"
 
-	audit "github.com/authboot/authboot-server/biz/model/audit"
 	"github.com/authboot/authboot-server/biz/dal/db"
+	audit "github.com/authboot/authboot-server/biz/model/audit"
 	service "github.com/authboot/authboot-server/biz/service/audit"
 	"github.com/authboot/authboot-server/pkg/errno"
 	"github.com/authboot/authboot-server/pkg/utils"

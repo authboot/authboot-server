@@ -63,12 +63,12 @@ const (
 	UserAddressNotExistErrCode
 	UserAddressLimitErrCode
 
-	// account merge error codes
-	AccountMergeSelfErrCode
-	AccountMergeNotAllowedErrCode
-	AccountMergeNoContactErrCode
-	AccountMergeCodeInvalidErrCode
-	AccountMergeConfirmRequiredErrCode
+	// Retired error codes; preserve subsequent public code values.
+	_
+	_
+	_
+	_
+	_
 
 	// identity binding error codes
 	IdentityLastOneErrCode
@@ -153,13 +153,6 @@ var (
 	// user address errors
 	UserAddressNotExistErr = NewErrNo(UserAddressNotExistErrCode, "address does not exist")
 	UserAddressLimitErr    = NewErrNo(UserAddressLimitErrCode, "address limit reached (max 10)")
-
-	// account merge errors
-	AccountMergeSelfErr        = NewErrNo(AccountMergeSelfErrCode, "cannot merge an account into itself")
-	AccountMergeNotAllowedErr  = NewErrNo(AccountMergeNotAllowedErrCode, "target account cannot be merged (disabled, already merged, or cross-organization)")
-	AccountMergeNoContactErr   = NewErrNo(AccountMergeNoContactErrCode, "target account has no bound phone/email to verify ownership")
-	AccountMergeCodeInvalidErr = NewErrNo(AccountMergeCodeInvalidErrCode, "merge verification code is invalid or expired")
-	AccountMergeConfirmRequiredErr = NewErrNo(AccountMergeConfirmRequiredErrCode, "merging accounts requires explicit user confirmation")
 
 	// identity binding errors
 	IdentityLastOneErr = NewErrNo(IdentityLastOneErrCode, "cannot unbind the last login identity")

@@ -3,6 +3,7 @@
 package dashboard
 
 import (
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -30,6 +31,7 @@ func _adminMw() []app.HandlerFunc {
 
 func _platformdashboardMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequirePlatform("dashboard:read"),
 	}
 }
 
@@ -45,5 +47,6 @@ func _organization_idMw() []app.HandlerFunc {
 
 func _orgdashboardMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("dashboard:read"),
 	}
 }

@@ -4,6 +4,7 @@ package user
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -45,7 +46,9 @@ func _usersMw() []app.HandlerFunc {
 }
 
 func _listusersMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("user:read"),
+	}
 }
 
 func _user_idMw() []app.HandlerFunc {
@@ -56,18 +59,21 @@ func _user_idMw() []app.HandlerFunc {
 func _updateuserMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("user:update"),
 	}
 }
 
 func _disableuserMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("user:update"),
 	}
 }
 
 func _enableuserMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("user:update"),
 	}
 }
 
@@ -77,11 +83,15 @@ func _users0Mw() []app.HandlerFunc {
 }
 
 func _getuserbyidentityMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("user:read"),
+	}
 }
 
 func _getuserMw() []app.HandlerFunc {
-	return []app.HandlerFunc{}
+	return []app.HandlerFunc{
+		// casbin.RequireOrg("user:read"),
+	}
 }
 
 func _userMw() []app.HandlerFunc {
@@ -121,28 +131,6 @@ func _identity_typeMw() []app.HandlerFunc {
 }
 
 func _unbindidentityMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-// Account merge routes inherit UserSessionAuth from _userMw; the acting user
-// comes from the token, so no extra per-route guard is needed.
-func _accountMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _preparemergeMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _mergeaccountMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _mergeMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }

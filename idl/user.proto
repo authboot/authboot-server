@@ -178,30 +178,21 @@ message UpdateMyProfileResponse {
 // credential proves ownership of the identity being bound:
 //   - email / phone : a verification code sent to that contact (bind scene)
 //   - wechat         : a fresh OAuth authorization code (re-authorization)
-// When the identity is already bound to ANOTHER account, the bind becomes a
-// conflict-driven merge: with confirm_merge=true the other account is merged
-// into the current one (its ownership is proven by the same credential).
+// An identity already bound to another account returns a conflict.
 message BindIdentityRequest {
   common.IdentityType identity_type = 1;
   string identity_value = 2;
   string credential = 3;
-  bool confirm_merge = 4;
+  reserved 4;
+  reserved "confirm_merge";
 }
 
 message BindIdentityResponse {
   int32 code = 1[(api.go_tag)='json:"code"'];
   string message = 2[(api.go_tag)='json:"message"'];
   UserIdentity identity = 3[(api.go_tag)='json:"identity"'];
-  // merged is true when this bind triggered a conflict-driven account merge
-  // (the identity was owned by another account which got merged into this one).
-  bool merged = 4[(api.go_tag)='json:"merged"'];
-  // Fresh token pair for the surviving account when merged=true: the merge
-  // revokes every old session and re-issues a new one so the current client
-  // does not have to log in again. Empty otherwise.
-  string access_token = 5[(api.go_tag)='json:"access_token"'];
-  string refresh_token = 6[(api.go_tag)='json:"refresh_token"'];
-  int64 access_token_expires_at = 7[(api.go_tag)='json:"access_token_expires_at"'];
-  int64 refresh_token_expires_at = 8[(api.go_tag)='json:"refresh_token_expires_at"'];
+  reserved 4 to 8;
+  reserved "merged", "access_token", "refresh_token", "access_token_expires_at", "refresh_token_expires_at";
 }
 
 message UnbindIdentityRequest {
@@ -225,37 +216,13 @@ message ListMyIdentitiesResponse {
   repeated UserIdentity identities = 3[(api.go_tag)='json:"identities"'];
 }
 
-// ---- 普通用户账号合并（仅 App 用户，管理员不支持）--------------------
-// PrepareMergeRequest names the account the caller wants to merge INTO their
-// current (authenticated) account. The caller must prove ownership of the
-// target account via a verification code sent to its bound phone/email.
-message PrepareMergeRequest {
-  int64 account_id = 1;
-}
-
-message PrepareMergeResponse {
+// Upload a multipart/form-data image in the "avatar" field.
+message UploadMyAvatarRequest {}
+message UploadMyAvatarResponse {
   int32 code = 1[(api.go_tag)='json:"code"'];
   string message = 2[(api.go_tag)='json:"message"'];
-  string masked_contact = 3[(api.go_tag)='json:"masked_contact"'];
-  int32 expire_seconds = 4[(api.go_tag)='json:"expire_seconds"'];
-  int32 retry_after_seconds = 5[(api.go_tag)='json:"retry_after_seconds"'];
-}
-
-message MergeAccountRequest {
-  int64 account_id = 1;
-  string code = 2;
-}
-
-message MergeAccountResponse {
-  int32 code = 1[(api.go_tag)='json:"code"'];
-  string message = 2[(api.go_tag)='json:"message"'];
-  // Fresh token pair for the surviving account: the merge revokes every old
-  // session, and a new one is re-issued so the current client does not have to
-  // log in again. Empty when re-issue failed (client should re-login).
-  string access_token = 3[(api.go_tag)='json:"access_token"'];
-  string refresh_token = 4[(api.go_tag)='json:"refresh_token"'];
-  int64 access_token_expires_at = 5[(api.go_tag)='json:"access_token_expires_at"'];
-  int64 refresh_token_expires_at = 6[(api.go_tag)='json:"refresh_token_expires_at"'];
+  string avatar = 3[(api.go_tag)='json:"avatar"'];
+  UserProfile profile = 4[(api.go_tag)='json:"profile"'];
 }
 
 // IdentityHandler manages the identities bound to the authenticated user
@@ -285,11 +252,7 @@ service UserHandler {
     option (api.put) = "/api/v1/user/profile";
   }
 
-  rpc PrepareMerge(PrepareMergeRequest) returns(PrepareMergeResponse) {
-    option (api.post) = "/api/v1/user/account/merge/prepare";
-  }
-
-  rpc MergeAccount(MergeAccountRequest) returns(MergeAccountResponse) {
-    option (api.post) = "/api/v1/user/account/merge";
+  rpc UploadMyAvatar(UploadMyAvatarRequest) returns(UploadMyAvatarResponse) {
+    option (api.post) = "/api/v1/user/profile/avatar";
   }
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -68,6 +69,9 @@ func (s *AdminAuthService) AdminLogin(req *auth.AdminLoginRequest) (*auth.AdminL
 		recordAdminLogin(0, req.Email, false, "account not found")
 		return nil, err
 	}
+
+	fmt.Println(utils.Crypt(req.Password))
+
 	if ok := utils.VerifyPassword(req.Password, user.Password); !ok {
 		audit.Record(s.c, &audit.Entry{
 			Action:  "admin.login",

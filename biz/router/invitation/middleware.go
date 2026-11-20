@@ -4,6 +4,7 @@ package invitation
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -37,12 +38,14 @@ func _revokeinvitationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequireOrg("invitation:delete"),
 	}
 }
 
 func _getinvitationMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
+		// casbin.RequireOrg("invitation:read"),
 	}
 }
 
@@ -59,6 +62,7 @@ func _organization_idMw() []app.HandlerFunc {
 func _listinvitationsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
+		// casbin.RequireOrg("invitation:read"),
 	}
 }
 
@@ -66,6 +70,7 @@ func _inviteadminMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		jwt.AdminSessionAuth(),
 		audit.Middleware(),
+		// casbin.RequireOrg("invitation:create"),
 	}
 }
 

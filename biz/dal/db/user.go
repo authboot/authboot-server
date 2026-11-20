@@ -178,6 +178,13 @@ func (d *UserDAO) ListUsersInOrg(organizationID int64, offset, limit int) ([]*Us
 	return users, total, nil
 }
 
+// UpdateAvatar changes only the avatar within the authenticated organization.
+func (d *UserDAO) UpdateAvatar(organizationID, userID int64, avatar string) error {
+	return d.db.Model(&User{}).
+		Where("id = ? AND organization_id = ?", userID, organizationID).
+		Update("avatar", avatar).Error
+}
+
 // UpdateUser updates a user's mutable profile fields within its organization.
 func (d *UserDAO) UpdateUser(user *User) error {
 	return d.db.Model(&User{}).

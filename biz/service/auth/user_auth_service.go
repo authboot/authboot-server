@@ -22,7 +22,6 @@ import (
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/authboot/authboot-server/biz/mw/oauth"
 	"github.com/authboot/authboot-server/biz/mw/redis"
-	userservice "github.com/authboot/authboot-server/biz/service/user"
 	"github.com/authboot/authboot-server/pkg/constants"
 	"github.com/authboot/authboot-server/pkg/errno"
 	"github.com/authboot/authboot-server/pkg/utils"
@@ -45,13 +44,6 @@ const (
 	// codeSceneRegister namespaces verification codes issued for registration.
 	// Must stay in sync with the message service's REGISTER scene ("register").
 	codeSceneRegister = "register"
-	// claimCodeSceneEmail / claimCodeSceneMobile are the verification-code scenes
-	// used to prove ownership of the claimed contact at login time. They must
-	// stay in sync with the message service's BIND_EMAIL / BIND_MOBILE scenes
-	// ("bind_email" / "bind_mobile"), which is where the client asks the code to
-	// be sent before logging in with claim fields.
-	claimCodeSceneEmail  = "bind_email"
-	claimCodeSceneMobile = "bind_mobile"
 	// codeSceneResetPassword is the message scene used for forgot-password codes.
 	codeSceneResetPassword = "reset_password"
 	// codeSceneDeleteAccount is the message scene used for account-deletion codes.
@@ -165,8 +157,7 @@ func (s *AuthService) checkLoginMethodAllowed(orgID int64, method loginMethod) e
 	return nil
 }
 
-// authenticate dispatches to the concrete login method and applies
-// claim-at-login, returning the authenticated user.
+// authenticate dispatches to the concrete login method.
 func (s *AuthService) authenticate(req *auth.LoginRequest) (*db.User, error) {
 	var u *db.User
 	var err error
@@ -201,12 +192,6 @@ func (s *AuthService) authenticate(req *auth.LoginRequest) (*db.User, error) {
 		return nil, err
 	}
 
-	// Claim-at-login: 主登录通过后，若请求携带认领字段，把"另一个身份"所属的
-	// 账号并入当前登录账号。业界推荐以邮箱/手机为合并键在登录时认领而非事后
-	// 合并，且必须用户主动确认（confirm_claim）+ 双向验证（主登录凭证 + 认领凭证）。
-	if err := s.applyClaim(req, u); err != nil {
-		return nil, err
-	}
 	return u, nil
 }
 
@@ -566,86 +551,6 @@ func (s *AuthService) ValidateToken(req *auth.ValidateTokenRequest) (*auth.Valid
 		},
 		ExpiresAt: expiresAt,
 	}, nil
-}
-
-// claimRequested reports whether the login request carries claim-at-login
-// fields (a non-empty claim credential or a claim identity type).
-func claimRequested(req *auth.LoginRequest) bool {
-	return req.ClaimCredential != "" || req.ClaimIdentityType != common.IdentityType_IDENTITY_TYPE_UNKNOWN
-}
-
-// applyClaim merges the account proven by the claim credentials into the login
-// account. The claim is only applied when the user explicitly confirmed it
-// (confirm_claim). Together with the primary login credential, the claim
-// credential forms the two-way ownership proof the industry requires: the login
-// proves control of the login account, and the claim credential (a contact
-// code, or a fresh OAuth re-authorization) proves control of the claimed one.
-func (s *AuthService) applyClaim(req *auth.LoginRequest, loginUser *db.User) error {
-	if !claimRequested(req) {
-		return nil
-	}
-	if !req.ConfirmClaim {
-		return errno.AccountMergeConfirmRequiredErr
-	}
-	claimed, err := s.resolveClaimedUser(req)
-	if err != nil {
-		return err
-	}
-	if claimed.ID == loginUser.ID {
-		return nil // already the same account — nothing to merge
-	}
-	if err := userservice.MergeUserAccounts(s.ctx, loginUser, claimed); err != nil {
-		return err
-	}
-	s.recordUserAudit(loginUser, "user.account.merge", "account", strconv.FormatInt(claimed.ID, 10), true, "")
-	return nil
-}
-
-// resolveClaimedUser proves ownership of the claimed identity and resolves the
-// account bound to it. The claim credential is one-time and consumed on verify:
-//   - email / phone: a verification code sent to that contact (bind scene), so
-//     only the contact's owner can complete the claim;
-//   - wechat: a fresh OAuth authorization code, i.e. re-authorizing the wechat
-//     account being claimed.
-func (s *AuthService) resolveClaimedUser(req *auth.LoginRequest) (*db.User, error) {
-	switch req.ClaimIdentityType {
-	case common.IdentityType_IDENTITY_TYPE_EMAIL:
-		if req.ClaimIdentityValue == "" || req.ClaimCredential == "" {
-			return nil, errno.ParamErr
-		}
-		if !codeStore.Verify(claimCodeSceneEmail, req.ClaimIdentityValue, req.ClaimCredential) {
-			return nil, errno.AuthorizationFailedErr
-		}
-		return s.resolveUser(req.OrganizationId, constants.IdentityTypeEmail, req.ClaimIdentityValue)
-	case common.IdentityType_IDENTITY_TYPE_PHONE:
-		if req.ClaimIdentityValue == "" || req.ClaimCredential == "" {
-			return nil, errno.ParamErr
-		}
-		if !codeStore.Verify(claimCodeSceneMobile, req.ClaimIdentityValue, req.ClaimCredential) {
-			return nil, errno.AuthorizationFailedErr
-		}
-		return s.resolveUser(req.OrganizationId, constants.IdentityTypePhone, req.ClaimIdentityValue)
-	case common.IdentityType_IDENTITY_TYPE_WECHAT:
-		if req.ClaimCredential == "" {
-			return nil, errno.ParamErr
-		}
-		// 组织未开启该提供商时，同样不允许通过它完成认领合并
-		if err := s.checkLoginMethodAllowed(req.OrganizationId, loginMethod(wechatProvider)); err != nil {
-			return nil, err
-		}
-		// 重新授权：一次全新的微信授权码 = 重新证明对微信账号的掌控。
-		tok, err := oauth.Exchange(s.ctx, req.OrganizationId, wechatProvider, req.ClaimCredential)
-		if err != nil {
-			return nil, err
-		}
-		info, err := oauth.FetchUserInfo(s.ctx, req.OrganizationId, wechatProvider, tok)
-		if err != nil {
-			return nil, err
-		}
-		return s.resolveUser(req.OrganizationId, constants.IdentityTypeWechat, info.OpenID)
-	default:
-		return nil, errno.ParamErr
-	}
 }
 
 // OAuthLogin completes a provider authorization-code flow: it consumes the CSRF

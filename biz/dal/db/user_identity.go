@@ -100,8 +100,7 @@ func (d *UserIdentityDAO) CheckIdentityExist(organizationID int64, identityType,
 }
 
 // ListIdentitiesByUserInOrg returns every identity bound to a user within an
-// organization, used by account merge to find a contact (phone/email) to verify
-// ownership of the account being merged away.
+// organization.
 func (d *UserIdentityDAO) ListIdentitiesByUserInOrg(organizationID, userID int64) ([]*UserIdentity, error) {
 	var identities []*UserIdentity
 	if err := d.db.Where("organization_id = ? AND user_id = ?", organizationID, userID).

@@ -22,7 +22,8 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/hlog"
+	"github.com/go-sql-driver/mysql"
+	"gorm.io/gorm"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
 	"github.com/authboot/authboot-server/biz/model/common"
@@ -57,7 +58,14 @@ type IdentityService struct {
 	c   *app.RequestContext
 
 	userDAO         *db.UserDAO
-	userIdentityDAO *db.UserIdentityDAO
+	userIdentityDAO identityStore
+}
+
+type identityStore interface {
+	QueryIdentity(int64, string, string) (*db.UserIdentity, error)
+	CreateIdentity(*db.UserIdentity) (int64, error)
+	ListIdentitiesByUserInOrg(int64, int64) ([]*db.UserIdentity, error)
+	DeleteIdentities(int64, int64, string, string) (int64, error)
 }
 
 // NewIdentityService creates an identity self-service.
@@ -72,11 +80,7 @@ func NewIdentityService(ctx context.Context, c *app.RequestContext) *IdentitySer
 
 // BindIdentity links a login identity to the current account. The credential
 // proves ownership of the identity being bound (a code sent to the contact, or
-// a fresh OAuth re-authorization). When the identity is already owned by
-// ANOTHER account, the bind becomes a conflict-driven merge: with
-// confirm_merge=true that account is merged into the current one — the bind
-// credential proves ownership of the identity, the session proves ownership of
-// the current account, and confirm_merge is the user's explicit consent.
+// a fresh OAuth re-authorization). An identity owned by another account conflicts.
 func (s *IdentityService) BindIdentity(req *user.BindIdentityRequest) (*user.BindIdentityResponse, error) {
 	me, err := s.currentUser()
 	if err != nil {
@@ -90,7 +94,7 @@ func (s *IdentityService) BindIdentity(req *user.BindIdentityRequest) (*user.Bin
 	if err != nil {
 		return nil, err
 	}
-	return s.bind(me, identityType, identityValue, req.ConfirmMerge)
+	return s.bind(me, identityType, identityValue)
 }
 
 // UnbindIdentity removes a bound identity (optionally one specific value of a
@@ -201,8 +205,8 @@ func (s *IdentityService) verifyBindCredential(org int64, req *user.BindIdentity
 
 // bind is the shared tail of BindIdentity: it checks whether the identity is
 // already taken and either binds it to the current account, idempotently
-// succeeds, or (on conflict, when confirmed) merges the owning account in.
-func (s *IdentityService) bind(me *db.User, identityType, identityValue string, confirmMerge bool) (*user.BindIdentityResponse, error) {
+// succeeds, or returns an identity conflict.
+func (s *IdentityService) bind(me *db.User, identityType, identityValue string) (*user.BindIdentityResponse, error) {
 	existing, err := s.userIdentityDAO.QueryIdentity(me.OrganizationID, identityType, identityValue)
 	switch {
 	case err == nil:
@@ -214,37 +218,7 @@ func (s *IdentityService) bind(me *db.User, identityType, identityValue string, 
 				Identity: toUserIdentityInfo(existing),
 			}, nil
 		}
-		// The identity belongs to another account → conflict-driven merge.
-		if !confirmMerge {
-			return nil, errno.AccountMergeConfirmRequiredErr
-		}
-		target, err := s.userDAO.QueryUserByIdInOrg(me.OrganizationID, existing.UserID)
-		if err != nil {
-			return nil, err
-		}
-		if err := MergeUserAccounts(s.ctx, me, target); err != nil {
-			return nil, err
-		}
-		// Re-issue a fresh token pair: the merge revoked every session, so the
-		// current client gets a new token instead of having to log in again.
-		deviceID, deviceName := CurrentSessionDevice(s.c)
-		accessToken, refreshToken, accessExp, refreshExp, err := ReissueTokens(me, deviceID, deviceName)
-		if err != nil {
-			// Re-issue failed (e.g. redis down): the merge still committed; the
-			// empty token fields tell the client to fall back to logging in.
-			hlog.CtxErrorf(s.ctx, "identity bind: reissue survivor %d tokens: %v", me.ID, err)
-		}
-		existing.UserID = me.ID // the identity now belongs to the survivor
-		return &user.BindIdentityResponse{
-			Code:                  errno.SuccessCode,
-			Message:               errno.SuccessMsg,
-			Identity:              toUserIdentityInfo(existing),
-			Merged:                true,
-			AccessToken:           accessToken,
-			RefreshToken:          refreshToken,
-			AccessTokenExpiresAt:  accessExp,
-			RefreshTokenExpiresAt: refreshExp,
-		}, nil
+		return nil, errno.IdentityAlreadyExistErr
 	case errors.Is(err, errno.UserIsNotExistErr):
 		now := time.Now().Unix()
 		id, err := s.userIdentityDAO.CreateIdentity(&db.UserIdentity{
@@ -256,6 +230,10 @@ func (s *IdentityService) bind(me *db.User, identityType, identityValue string, 
 			UpdatedAt:      now,
 		})
 		if err != nil {
+			var duplicate *mysql.MySQLError
+			if errors.Is(err, gorm.ErrDuplicatedKey) || (errors.As(err, &duplicate) && duplicate.Number == 1062) {
+				return nil, errno.IdentityAlreadyExistErr
+			}
 			return nil, err
 		}
 		created := &db.UserIdentity{

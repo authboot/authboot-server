@@ -4,6 +4,7 @@ package oauth
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -46,12 +47,14 @@ func _oauthMw() []app.HandlerFunc {
 
 func _listoauthconfigsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("oauth:read"),
 	}
 }
 
 func _deleteoauthconfigMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("oauth:delete"),
 	}
 }
 
@@ -62,12 +65,14 @@ func _oauth0Mw() []app.HandlerFunc {
 
 func _getoauthconfigMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("oauth:read"),
 	}
 }
 
 func _setoauthconfigMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("oauth:update"),
 	}
 }
 

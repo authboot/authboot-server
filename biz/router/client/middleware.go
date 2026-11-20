@@ -4,6 +4,7 @@ package client
 
 import (
 	"github.com/authboot/authboot-server/biz/mw/audit"
+	// "github.com/authboot/authboot-server/biz/mw/casbin"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -41,6 +42,7 @@ func _organization_idMw() []app.HandlerFunc {
 
 func _listclientsMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("client:read"),
 	}
 }
 
@@ -52,22 +54,26 @@ func _clientsMw() []app.HandlerFunc {
 func _createclientMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("client:create"),
 	}
 }
 
 func _deleteclientMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("client:delete"),
 	}
 }
 
 func _getclientMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
+		// casbin.RequireOrg("client:read"),
 	}
 }
 
 func _updateclientMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),
+		// casbin.RequireOrg("client:update"),
 	}
 }
