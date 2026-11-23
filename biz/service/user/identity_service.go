@@ -24,6 +24,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
 	"github.com/authboot/authboot-server/biz/model/common"
@@ -109,30 +110,40 @@ func (s *IdentityService) UnbindIdentity(req *user.UnbindIdentityRequest) (*user
 	if identityType == "" {
 		return nil, errno.ParamErr
 	}
-	// Count what would be removed vs. what would remain.
-	identities, err := s.userIdentityDAO.ListIdentitiesByUserInOrg(me.OrganizationID, me.ID)
-	if err != nil {
-		return nil, err
-	}
-	removed, remaining := 0, 0
-	for _, id := range identities {
-		if id.IdentityType == identityType && (req.IdentityValue == "" || id.IdentityValue == req.IdentityValue) {
-			removed++
-		} else {
-			remaining++
+	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		var locked db.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND organization_id = ?", me.ID, me.OrganizationID).First(&locked).Error; err != nil {
+			return err
 		}
-	}
-	if removed == 0 {
-		// Nothing bound to unbind — idempotent success.
-		return &user.UnbindIdentityResponse{
-			Code:    errno.SuccessCode,
-			Message: errno.SuccessMsg,
-		}, nil
-	}
-	if remaining == 0 {
-		return nil, errno.IdentityLastOneErr
-	}
-	if _, err := s.userIdentityDAO.DeleteIdentities(me.OrganizationID, me.ID, identityType, req.IdentityValue); err != nil {
+		if _, err := (redis.SessionStore{}).GetWithDB(tx, jwt.SubjectUser, s.c.GetString(jwt.CtxKeySessionID)); err != nil {
+			return errno.AuthorizationFailedErr
+		}
+		dao := db.NewUserIdentityDAO(tx)
+		identities, err := dao.ListIdentitiesByUserInOrg(me.OrganizationID, me.ID)
+		if err != nil {
+			return err
+		}
+		removed, remaining := 0, 0
+		for _, identity := range identities {
+			if identity.IdentityType == identityType && (req.IdentityValue == "" || identity.IdentityValue == req.IdentityValue) {
+				removed++
+			} else {
+				remaining++
+			}
+		}
+		if removed == 0 {
+			return nil
+		}
+		if remaining == 0 {
+			return errno.IdentityLastOneErr
+		}
+		if err := db.ConsumeSecurityGrant(tx, string(s.c.GetHeader("X-Step-Up-Token")), db.SecurityGrant{Subject: jwt.SubjectUser, AccountID: me.ID, OrganizationID: me.OrganizationID, SessionID: s.c.GetString(jwt.CtxKeySessionID), Scope: "identity:unbind"}, time.Now()); err != nil {
+			return errno.AuthorizationFailedErr
+		}
+		_, err = dao.DeleteIdentities(me.OrganizationID, me.ID, identityType, req.IdentityValue)
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &user.UnbindIdentityResponse{

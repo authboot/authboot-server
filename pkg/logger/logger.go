@@ -14,51 +14,89 @@
  * limitations under the License.
  */
 
-// Package logger is the project's structured logging foundation built on zap.
-// It centralizes logger construction (JSON encoding, level control, file
-// rotation) and offers context-aware helpers that automatically attach the
-// request id carried in the request context.
+// Package logger is the single logging entry point of the service.
+//
+// One zap core backs every log line: business logs, the HTTP access log,
+// Hertz framework logs (hlog) and the standard library "log" package. All of
+// them therefore share the same JSON schema, level switch and output.
+//
+// Request-scoped fields (request_id, trace_id, ...) travel in the
+// context.Context: a middleware binds them once with WithRequestID /
+// WithFields, and every downstream From(ctx) or hlog.CtxXxxf(ctx, ...) call
+// emits them automatically.
 package logger
 
 import (
-	"context"
+	"errors"
+	"fmt"
 	"os"
-	"sync"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 
+	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// ctxKey is a private type for context keys defined in this package, avoiding
-// collisions with keys from other packages.
-type ctxKey struct{}
-
-// requestIDKey is the context key under which the per-request id is stored.
-var requestIDKey = ctxKey{}
-
-var (
-	base  *zap.Logger
-	sugar *zap.SugaredLogger
-	once  sync.Once
+// Supported values of Config.Output.
+const (
+	OutputFile   = "file"
+	OutputStdout = "stdout"
+	OutputBoth   = "both"
 )
 
-// Config controls how the global logger is built. The zero value is valid and
-// yields an info-level, stdout-only JSON logger.
-type Config struct {
-	Level      string // debug/info/warn/error; defaults to info
-	FilePath   string // rotating log file path; empty means file output disabled
-	MaxSize    int    // megabytes per file before rotation; defaults to 20
-	MaxBackups int    // number of rotated files to retain; defaults to 5
-	MaxAge     int    // days to retain a rotated file; defaults to 10
-	Compress   bool   // gzip-compress rotated files
-	Console    bool   // also write to stdout (always on when FilePath is empty)
+var (
+	// level is shared by every logger built in this package, so SetLevel takes
+	// effect immediately, including on loggers already bound to a context.
+	level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	global atomic.Pointer[zap.Logger]
+)
+
+// Before Init the package logs JSON to stdout at info level, so library code
+// and tests never see a nil logger.
+func init() {
+	global.Store(newLogger(zapcore.Lock(os.Stdout), ""))
 }
 
-// withDefaults fills unset fields with sensible production defaults.
-func (c *Config) withDefaults() {
+// Config controls how the global logger is built. The zero value is valid.
+type Config struct {
+	Service    string // "service" field on every line; defaults to authboot-server
+	Level      string // debug/info/warn/error; defaults to info
+	Output     string // file, stdout or both; defaults to file
+	FilePath   string // rotating log file; defaults to hlog/logs/app.log
+	MaxSize    int    // megabytes per file before rotation; defaults to 20
+	MaxBackups int    // rotated files to retain; defaults to 5
+	MaxAge     int    // days to retain a rotated file; defaults to 10
+}
+
+// ConfigFromEnv reads LOG_LEVEL, LOG_OUTPUT and LOG_FILE. Unset variables fall
+// back to the Config defaults.
+func ConfigFromEnv() Config {
+	return Config{
+		Level:    os.Getenv("LOG_LEVEL"),
+		Output:   os.Getenv("LOG_OUTPUT"),
+		FilePath: os.Getenv("LOG_FILE"),
+	}
+}
+
+func (c Config) withDefaults() Config {
+	c.Level = strings.TrimSpace(c.Level)
+	c.Output = strings.ToLower(strings.TrimSpace(c.Output))
+	c.FilePath = strings.TrimSpace(c.FilePath)
+	if c.Service == "" {
+		c.Service = "authboot-server"
+	}
 	if c.Level == "" {
 		c.Level = "info"
+	}
+	if c.Output == "" {
+		c.Output = OutputFile
+	}
+	if c.FilePath == "" {
+		c.FilePath = filepath.Join("hlog", "logs", "app.log")
 	}
 	if c.MaxSize == 0 {
 		c.MaxSize = 20
@@ -69,119 +107,108 @@ func (c *Config) withDefaults() {
 	if c.MaxAge == 0 {
 		c.MaxAge = 10
 	}
-	if c.FilePath == "" {
-		c.Console = true
-	}
+	return c
 }
 
-// parseLevel maps a textual level to its zapcore equivalent, falling back to
-// info level for unknown values.
-func parseLevel(level string) zapcore.Level {
-	lv, err := zapcore.ParseLevel(level)
+// open builds the write target and returns the function that releases it.
+func (c Config) open() (zapcore.WriteSyncer, func() error, error) {
+	var syncers []zapcore.WriteSyncer
+	closeOutput := func() error { return nil }
+
+	if c.Output != OutputStdout {
+		// The file name is fixed: lumberjack rotates by size and stamps each
+		// backup with its rotation time, so a long-running process never
+		// keeps writing into a file named after its start date.
+		file := &lumberjack.Logger{
+			Filename:   c.FilePath,
+			MaxSize:    c.MaxSize,
+			MaxBackups: c.MaxBackups,
+			MaxAge:     c.MaxAge,
+			Compress:   true,
+		}
+		// An empty write makes lumberjack create the directory and file now,
+		// so an unwritable path fails startup instead of dropping logs later.
+		if _, err := file.Write(nil); err != nil {
+			return nil, nil, errors.Join(fmt.Errorf("logger: open %s: %w", c.FilePath, err), file.Close())
+		}
+		syncers = append(syncers, zapcore.AddSync(file))
+		closeOutput = file.Close
+	}
+	if c.Output != OutputFile {
+		syncers = append(syncers, zapcore.Lock(os.Stdout))
+	}
+	return zapcore.NewMultiWriteSyncer(syncers...), closeOutput, nil
+}
+
+// newLogger builds a JSON logger on ws governed by the package level.
+func newLogger(ws zapcore.WriteSyncer, service string) *zap.Logger {
+	enc := zap.NewProductionEncoderConfig()
+	enc.TimeKey = "ts"
+	enc.MessageKey = "message"
+	enc.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	l := zap.New(
+		zapcore.NewCore(zapcore.NewJSONEncoder(enc), ws, level),
+		zap.AddCaller(),
+		// Expected failures are logged at error level all the time; a stack
+		// on each of them is noise. Keep stacks for panic-class entries.
+		zap.AddStacktrace(zapcore.DPanicLevel),
+	)
+	if service != "" {
+		l = l.With(zap.String("service", service))
+	}
+	return l
+}
+
+// Init builds the global logger from cfg, routes hlog and the standard library
+// "log" package into it, and returns the cleanup to run at process exit.
+//
+// Call it once, first thing at startup: hlog.SetLogger is not safe to call
+// once requests are being served.
+func Init(cfg Config) (cleanup func() error, err error) {
+	cfg = cfg.withDefaults()
+
+	lvl, err := zapcore.ParseLevel(cfg.Level)
 	if err != nil {
-		return zapcore.InfoLevel
+		return nil, fmt.Errorf("logger: invalid level %q: %w", cfg.Level, err)
 	}
-	return lv
-}
-
-// Init builds the global logger from cfg. It is safe to call multiple times;
-// only the first call takes effect, so startup code can initialize it once.
-func Init(cfg Config) {
-	once.Do(func() {
-		build(cfg)
-	})
-}
-
-// build constructs the zap logger and its sugared companion from cfg.
-func build(cfg Config) {
-	cfg.withDefaults()
-
-	encCfg := zap.NewProductionEncoderConfig()
-	encCfg.MessageKey = "message"
-	encCfg.TimeKey = "ts"
-	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-	encoder := zapcore.NewJSONEncoder(encCfg)
-	level := zap.NewAtomicLevelAt(parseLevel(cfg.Level))
-
-	cores := make([]zapcore.Core, 0, 2)
-	if cfg.FilePath != "" {
-		ws := zapcore.AddSync(&lumberjack.Logger{
-			Filename:   cfg.FilePath,
-			MaxSize:    cfg.MaxSize,
-			MaxBackups: cfg.MaxBackups,
-			MaxAge:     cfg.MaxAge,
-			Compress:   cfg.Compress,
-		})
-		cores = append(cores, zapcore.NewCore(encoder, ws, level))
+	switch cfg.Output {
+	case OutputFile, OutputStdout, OutputBoth:
+	default:
+		return nil, fmt.Errorf("logger: invalid output %q (want file, stdout or both)", cfg.Output)
 	}
-	if cfg.Console {
-		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), level))
+	ws, closeOutput, err := cfg.open()
+	if err != nil {
+		return nil, err
 	}
 
-	base = zap.New(zapcore.NewTee(cores...), zap.AddCaller(), zap.AddCallerSkip(1))
-	sugar = base.Sugar()
+	level.SetLevel(lvl)
+	l := newLogger(ws, cfg.Service)
+	global.Store(l)
+	hlog.SetLogger(hlogAdapter{})
+	restoreStdLog := zap.RedirectStdLog(l.Named("stdlog"))
+
+	return func() error {
+		restoreStdLog()
+		// Syncing stdout fails on terminals and pipes; the file target is
+		// unbuffered, so nothing is lost by ignoring the result.
+		_ = l.Sync()
+		return closeOutput()
+	}, nil
 }
 
-// L returns the global sugared logger, initializing it with defaults on first
-// use so callers never receive a nil logger.
-func L() *zap.SugaredLogger {
-	if sugar == nil {
-		Init(Config{})
+// L returns the global logger. Prefer From(ctx) inside a request so the
+// request-scoped fields are attached.
+func L() *zap.Logger {
+	return global.Load()
+}
+
+// SetLevel changes the minimum level at runtime (debug/info/warn/error).
+func SetLevel(text string) error {
+	lvl, err := zapcore.ParseLevel(strings.TrimSpace(text))
+	if err != nil {
+		return fmt.Errorf("logger: invalid level %q: %w", text, err)
 	}
-	return sugar
-}
-
-// Sync flushes any buffered log entries; call it before the process exits.
-func Sync() error {
-	if base == nil {
-		return nil
-	}
-	return base.Sync()
-}
-
-// WithRequestID returns a child context carrying the given request id so that
-// downstream Ctx* logging calls can attach it automatically.
-func WithRequestID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, requestIDKey, id)
-}
-
-// RequestID extracts the request id previously stored by WithRequestID,
-// returning an empty string when absent.
-func RequestID(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return ""
-}
-
-// ctxFields prepends the request id (when present) to the caller-supplied
-// key/value pairs.
-func ctxFields(ctx context.Context, kv []interface{}) []interface{} {
-	if id := RequestID(ctx); id != "" {
-		return append([]interface{}{"request_id", id}, kv...)
-	}
-	return kv
-}
-
-// CtxDebugw logs a debug message with structured fields and the context request id.
-func CtxDebugw(ctx context.Context, msg string, kv ...interface{}) {
-	L().Debugw(msg, ctxFields(ctx, kv)...)
-}
-
-// CtxInfow logs an info message with structured fields and the context request id.
-func CtxInfow(ctx context.Context, msg string, kv ...interface{}) {
-	L().Infow(msg, ctxFields(ctx, kv)...)
-}
-
-// CtxWarnw logs a warning message with structured fields and the context request id.
-func CtxWarnw(ctx context.Context, msg string, kv ...interface{}) {
-	L().Warnw(msg, ctxFields(ctx, kv)...)
-}
-
-// CtxErrorw logs an error message with structured fields and the context request id.
-func CtxErrorw(ctx context.Context, msg string, kv ...interface{}) {
-	L().Errorw(msg, ctxFields(ctx, kv)...)
+	level.SetLevel(lvl)
+	return nil
 }

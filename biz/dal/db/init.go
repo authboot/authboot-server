@@ -80,6 +80,11 @@ func Init() {
 		&UserLoginLog{},
 		&AppClient{},
 		&AdminUser{},
+		&AdminMFA{},
+		&AdminMFARecovery{},
+		&AdminMFAChallenge{},
+		&SecurityGrant{},
+		&RevocationOutbox{},
 		// admin / user symmetric security tables
 		&AdminLoginLog{},
 		&UserAuditLog{},
@@ -87,6 +92,7 @@ func Init() {
 		&UserSessionRow{},
 		&AdminDevice{},
 		&UserDevice{},
+		&UserSecurityEvent{},
 		&OrganizationLegalDocVersion{},
 	); err != nil {
 		panic(err)

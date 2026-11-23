@@ -49,8 +49,7 @@ func _adminrefreshtokenMw() []app.HandlerFunc {
 }
 
 func _switchorganizationMw() []app.HandlerFunc {
-	// your code...
-	return nil
+	return []app.HandlerFunc{jwt.AdminSessionAuth()}
 }
 
 func _validateadmintokenMw() []app.HandlerFunc {
@@ -74,14 +73,11 @@ func _loginMw() []app.HandlerFunc {
 }
 
 func _logoutMw() []app.HandlerFunc {
-	// your code...
-	return nil
+	return []app.HandlerFunc{jwt.UserSessionAuth()}
 }
 
 func _refreshtokenMw() []app.HandlerFunc {
-	return []app.HandlerFunc{
-		jwt.UserSessionAuth(),
-	}
+	return nil // The opaque refresh token authenticates this endpoint independently.
 }
 
 func _registerMw() []app.HandlerFunc {

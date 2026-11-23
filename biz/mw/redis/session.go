@@ -21,15 +21,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v7"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
 	"github.com/authboot/authboot-server/pkg/constants"
+	"github.com/authboot/authboot-server/pkg/geoip"
 )
 
 // Server-side session / refresh-token store. Access tokens stay stateless and
@@ -63,19 +67,64 @@ var ErrSessionNotFound = errors.New("redis: session not found")
 // SessionRecord is one login session (one device). RefreshToken holds the
 // CURRENT opaque token after any rotations.
 type SessionRecord struct {
-	SessionID      string `json:"session_id"`
-	AccountID      int64  `json:"account_id"`
-	OrganizationID int64  `json:"organization_id"`
-	DeviceID       string `json:"device_id"`
-	DeviceName     string `json:"device_name"`
-	RefreshToken   string `json:"refresh_token"`
-	CreatedAt      int64  `json:"created_at"`
-	ExpiresAt      int64  `json:"expires_at"`
+	LoginMetadata
+	LastActiveAt       int64          `json:"last_active_at"`
+	LastActiveIP       string         `json:"last_active_ip"`
+	LastActiveLocation geoip.Location `json:"last_active_location"`
+	SessionID          string         `json:"session_id"`
+	AccountID          int64          `json:"account_id"`
+	OrganizationID     int64          `json:"organization_id"`
+	DeviceID           string         `json:"device_id"`
+	DeviceName         string         `json:"device_name"`
+	RefreshToken       string         `json:"refresh_token"`
+	CreatedAt          int64          `json:"created_at"`
+	ExpiresAt          int64          `json:"expires_at"`
+}
+
+type LoginMetadata struct {
+	SessionVersion int64          `json:"session_version,omitempty"`
+	MFAGeneration  int64          `json:"mfa_generation,omitempty"`
+	IP             string         `json:"ip,omitempty"`
+	UserAgent      string         `json:"user_agent,omitempty"`
+	ClientID       int64          `json:"client_id,omitempty"`
+	Location       geoip.Location `json:"location"`
 }
 
 // SessionStore is the facade for the server-side session/refresh store. Every
 // method takes a subject ("admin" / "user") that namespaces its keys.
 type SessionStore struct{}
+
+func (SessionStore) Healthy() error {
+	if rdbSession == nil {
+		return ErrSessionStoreUnavailable
+	}
+	return rdbSession.Ping().Err()
+}
+
+// ByRefresh authenticates without consuming. Rotate must still perform its CAS.
+func (SessionStore) ByRefresh(subject, token string) (*SessionRecord, error) {
+	if rdbSession == nil {
+		return nil, ErrSessionStoreUnavailable
+	}
+	sid, err := rdbSession.Get(refreshKey(subject, token)).Result()
+	if err == redis.Nil {
+		return nil, ErrSessionNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	rec, err := getSession(subject, sid)
+	if err != nil {
+		return nil, err
+	}
+	if rec.RefreshToken != token {
+		return nil, ErrSessionNotFound
+	}
+	if err := checkSessionVersion(subject, rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
 
 func sessionKey(subject, sid string) string { return sessionKeyPrefix + subject + ":" + sid }
 func refreshKey(subject, tok string) string { return refreshKeyPrefix + subject + ":" + tok }
@@ -97,7 +146,10 @@ func newRefreshToken() (string, error) {
 // (rec.RefreshToken) and session id (rec.SessionID). ttl is the refresh/session
 // lifetime. The caller mints the short-lived access token separately
 // (jwt.Generate{Admin,User}AccessToken), passing rec.SessionID.
-func (SessionStore) Create(subject string, accountID, organizationID int64, deviceID, deviceName string, ttl time.Duration) (*SessionRecord, error) {
+func (SessionStore) Create(subject string, accountID, organizationID int64, deviceID, deviceName string, ttl time.Duration, metadata ...LoginMetadata) (*SessionRecord, error) {
+	if ttl.Milliseconds() <= 0 {
+		return nil, errors.New("redis: session TTL must be positive")
+	}
 	if rdbSession == nil {
 		return nil, ErrSessionStoreUnavailable
 	}
@@ -114,9 +166,25 @@ func (SessionStore) Create(subject string, accountID, organizationID int64, devi
 		DeviceName:     deviceName,
 		RefreshToken:   token,
 		CreatedAt:      now.Unix(),
+		LastActiveAt:   now.Unix(),
 		ExpiresAt:      now.Add(ttl).Unix(),
 	}
-	if err := saveSession(subject, rec, ttl); err != nil {
+	if len(metadata) > 0 {
+		rec.LoginMetadata = metadata[0]
+		rec.LastActiveIP, rec.LastActiveLocation = rec.IP, rec.Location
+	}
+	save := func() error { return saveSession(subject, rec, ttl) }
+	if db.DB != nil {
+		save = func() error {
+			return db.DB.Transaction(func(tx *gorm.DB) error {
+				if err := checkSessionVersionDB(tx.Clauses(clause.Locking{Strength: "UPDATE"}), subject, rec); err != nil {
+					return err
+				}
+				return saveSession(subject, rec, ttl)
+			})
+		}
+	}
+	if err := save(); err != nil {
 		return nil, err
 	}
 	// 双写落库（best-effort）：Redis 是热路径，MySQL 留审计/巡检记录。
@@ -127,6 +195,9 @@ func (SessionStore) Create(subject string, accountID, organizationID int64, devi
 // persistSessionCreate 把新会话写入 tb_admin_sessions / tb_user_sessions。
 // 写库失败只忽略：Redis 已写成功，落库是审计用途，不应阻塞登录。
 func persistSessionCreate(subject string, rec *SessionRecord) {
+	if db.DB == nil {
+		return
+	}
 	defer func() {
 		// db 包未初始化（如单测环境）时静默跳过
 		_ = recover()
@@ -147,17 +218,25 @@ func persistSessionCreate(subject string, rec *SessionRecord) {
 		return
 	}
 	row := &db.UserSessionRow{
-		SessionID:      rec.SessionID,
-		OrganizationID: rec.OrganizationID,
-		UserID:         rec.AccountID,
-		DeviceID:       rec.DeviceID,
-		DeviceName:     rec.DeviceName,
-		Status:         db.SessionRowActive,
-		CreatedAt:      rec.CreatedAt,
-		ExpiresAt:      rec.ExpiresAt,
-		LastActiveAt:   rec.CreatedAt,
+		LastActiveIP:       rec.LastActiveIP,
+		LastActiveLocation: rec.LastActiveLocation,
+		ClientID:           rec.ClientID,
+		IP:                 rec.IP,
+		UserAgent:          rec.UserAgent,
+		Location:           rec.Location,
+		SessionID:          rec.SessionID,
+		OrganizationID:     rec.OrganizationID,
+		UserID:             rec.AccountID,
+		DeviceID:           rec.DeviceID,
+		DeviceName:         rec.DeviceName,
+		Status:             db.SessionRowActive,
+		CreatedAt:          rec.CreatedAt,
+		ExpiresAt:          rec.ExpiresAt,
+		LastActiveAt:       rec.CreatedAt,
 	}
-	_ = db.UpsertUserSessionRow(row)
+	if err := db.UpsertUserSessionRow(row); err != nil {
+		log.Printf("persist user session failed: %v", err)
+	}
 }
 
 // saveSession writes the session record, the refresh->sid lookup, and the
@@ -167,18 +246,17 @@ func saveSession(subject string, rec *SessionRecord, ttl time.Duration) error {
 	if err != nil {
 		return err
 	}
-	if err := rdbSession.Set(sessionKey(subject, rec.SessionID), buf, ttl).Err(); err != nil {
-		return err
-	}
-	if err := rdbSession.Set(refreshKey(subject, rec.RefreshToken), rec.SessionID, ttl).Err(); err != nil {
-		return err
-	}
 	uk := userSessionsKey(subject, rec.AccountID)
-	if err := rdbSession.SAdd(uk, rec.SessionID).Err(); err != nil {
-		return err
-	}
-	// Keep the index alive at least as long as the longest-lived session.
-	return rdbSession.Expire(uk, ttl).Err()
+	return rdbSession.Eval(`
+local kind = redis.call('TYPE', KEYS[3]).ok
+if kind ~= 'none' and kind ~= 'set' then return redis.error_reply('invalid session index type') end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[3])
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+redis.call('SADD', KEYS[3], ARGV[2])
+if redis.call('PTTL', KEYS[3]) < tonumber(ARGV[3]) then
+ redis.call('PEXPIRE', KEYS[3], ARGV[3])
+end
+return 1`, []string{sessionKey(subject, rec.SessionID), refreshKey(subject, rec.RefreshToken), uk}, string(buf), rec.SessionID, ttl.Milliseconds()).Err()
 }
 
 // Rotate validates a presented refresh token and rotates it: the old token is
@@ -186,6 +264,9 @@ func saveSession(subject string, rec *SessionRecord, ttl time.Duration) error {
 // the updated record (new rec.RefreshToken). A token that is unknown/expired —
 // including a replayed, already-rotated one — yields ErrSessionNotFound.
 func (SessionStore) Rotate(subject, oldRefresh string, ttl time.Duration) (*SessionRecord, error) {
+	if ttl.Milliseconds() <= 0 {
+		return nil, errors.New("redis: session TTL must be positive")
+	}
 	if rdbSession == nil {
 		return nil, ErrSessionStoreUnavailable
 	}
@@ -204,18 +285,56 @@ func (SessionStore) Rotate(subject, oldRefresh string, ttl time.Duration) (*Sess
 	if err != nil {
 		return nil, err
 	}
-	// Invalidate the old token first so it cannot be reused.
-	if err := rdbSession.Del(refreshKey(subject, oldRefresh)).Err(); err != nil {
+	if err := checkSessionVersion(subject, rec); err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	rec.RefreshToken = newTok
 	rec.ExpiresAt = now.Add(ttl).Unix()
-	if err := saveSession(subject, rec, ttl); err != nil {
+	buf, err := json.Marshal(rec)
+	if err != nil {
 		return nil, err
 	}
-	// rotate 后 sid 不变，落库 upsert 刷新过期时间与最后活跃时间
-	persistSessionCreate(subject, rec)
+	// Compare and swap in Redis. A losing replay never revokes the winner;
+	// a concurrent revoke leaves no record that this script could resurrect.
+	updated, err := rdbSession.Eval(`
+local raw = redis.call('GET', KEYS[1])
+if not raw or redis.call('GET', KEYS[2]) ~= ARGV[1] then return '' end
+local rec = cjson.decode(raw)
+if rec.refresh_token ~= ARGV[2] then return '' end
+if redis.call('EXISTS', KEYS[3]) ~= 0 then return '' end
+local kind = redis.call('TYPE', KEYS[4]).ok
+if kind ~= 'none' and kind ~= 'set' then return redis.error_reply('invalid session index type') end
+local replacement = cjson.decode(ARGV[3])
+rec.refresh_token = replacement.refresh_token
+rec.expires_at = replacement.expires_at
+redis.call('SET', KEYS[1], cjson.encode(rec), 'PX', ARGV[4])
+redis.call('SET', KEYS[3], ARGV[1], 'PX', ARGV[4])
+redis.call('DEL', KEYS[2])
+redis.call('SADD', KEYS[4], ARGV[1])
+if redis.call('PTTL', KEYS[4]) < tonumber(ARGV[4]) then
+ redis.call('PEXPIRE', KEYS[4], ARGV[4])
+end
+return cjson.encode(rec)`, []string{sessionKey(subject, sid), refreshKey(subject, oldRefresh), refreshKey(subject, newTok), userSessionsKey(subject, rec.AccountID)}, sid, oldRefresh, string(buf), ttl.Milliseconds()).Text()
+	if err != nil {
+		return nil, err
+	}
+	if updated == "" {
+		return nil, ErrSessionNotFound
+	}
+	if err := json.Unmarshal([]byte(updated), rec); err != nil {
+		return nil, err
+	}
+	// A refresh must never upsert/revive an audit row concurrently revoked.
+	if db.DB != nil && subject == constants.UserSubject {
+		if err := db.DB.Model(&db.UserSessionRow{}).
+			Where("session_id = ? AND organization_id = ? AND user_id = ? AND status = ?", rec.SessionID, rec.OrganizationID, rec.AccountID, db.SessionRowActive).
+			Update("expires_at", rec.ExpiresAt).Error; err != nil {
+			log.Printf("persist user refresh failed: %v", err)
+		}
+	} else {
+		persistSessionCreate(subject, rec)
+	}
 	return rec, nil
 }
 
@@ -226,7 +345,104 @@ func (SessionStore) Get(subject, sid string) (*SessionRecord, error) {
 	if rdbSession == nil {
 		return nil, ErrSessionStoreUnavailable
 	}
-	return getSession(subject, sid)
+	rec, err := getSession(subject, sid)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSessionVersion(subject, rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func checkSessionVersion(subject string, rec *SessionRecord) error {
+	return checkSessionVersionDB(db.DB, subject, rec)
+}
+
+func checkSessionVersionDB(conn *gorm.DB, subject string, rec *SessionRecord) error {
+	if conn == nil {
+		return nil
+	} // Isolated Redis tests have no SQL dependency.
+	if subject == constants.UserSubject {
+		var u db.User
+		if err := conn.Where("id = ? AND organization_id = ?", rec.AccountID, rec.OrganizationID).First(&u).Error; err != nil {
+			return err
+		}
+		if u.SessionVersion == rec.SessionVersion {
+			return nil
+		}
+	}
+	if subject == constants.AdminSubject {
+		var u db.AdminUser
+		if err := conn.First(&u, rec.AccountID).Error; err != nil {
+			return err
+		}
+		if u.MFAGeneration == rec.MFAGeneration {
+			return nil
+		}
+	}
+	return ErrSessionNotFound
+}
+
+// GetWithDB uses the caller's transaction, avoiding a second connection and
+// ensuring that authority checks see that transaction's security mutations.
+func (SessionStore) GetWithDB(conn *gorm.DB, subject, sid string) (*SessionRecord, error) {
+	if rdbSession == nil {
+		return nil, ErrSessionStoreUnavailable
+	}
+	rec, err := getSession(subject, sid)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkSessionVersionDB(conn, subject, rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// RevokeBeforeVersion uses raw records so invalidated sessions can be cleaned.
+// Session versions are immutable across refresh; Redis deletion is atomic.
+func (SessionStore) RevokeBeforeVersion(subject string, account, org, version int64) error {
+	if rdbSession == nil {
+		return ErrSessionStoreUnavailable
+	}
+	if subject != constants.UserSubject && subject != constants.AdminSubject {
+		return ErrSessionNotFound
+	}
+	ids, err := rdbSession.SMembers(userSessionsKey(subject, account)).Result()
+	if err != nil {
+		return err
+	}
+	for _, sid := range ids {
+		rec, err := getSession(subject, sid)
+		if err == ErrSessionNotFound {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		v := rec.SessionVersion
+		if subject == constants.AdminSubject {
+			v = rec.MFAGeneration
+		}
+		if rec.AccountID == account && (subject == constants.AdminSubject || rec.OrganizationID == org) && v < version {
+			if db.DB != nil {
+				var result *gorm.DB
+				if subject == constants.AdminSubject {
+					result = db.DB.Model(&db.AdminSessionRow{}).Where("session_id = ? AND account_id = ?", rec.SessionID, account).Update("status", db.SessionRowRevoked)
+				} else {
+					result = db.DB.Model(&db.UserSessionRow{}).Where("session_id = ? AND user_id = ? AND organization_id = ?", rec.SessionID, account, org).Update("status", db.SessionRowRevoked)
+				}
+				if result.Error != nil {
+					return result.Error
+				}
+			}
+			if err := deleteSession(subject, rec); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func getSession(subject, sid string) (*SessionRecord, error) {
@@ -257,7 +473,9 @@ func (SessionStore) Revoke(subject, sid string) error {
 		return err
 	}
 	// 落库行标记 revoked（best-effort，审计用途）
-	_ = db.RevokeSessionRow(sid)
+	if db.DB != nil {
+		_ = db.RevokeSessionRow(sid)
+	}
 	return deleteSession(subject, rec)
 }
 
@@ -272,7 +490,21 @@ func (SessionStore) RevokeByRefresh(subject, refreshToken string) error {
 	} else if err != nil {
 		return err
 	}
-	return SessionStore{}.Revoke(subject, sid)
+	rec, err := getSession(subject, sid)
+	if err == ErrSessionNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return rdbSession.Eval(`
+local raw = redis.call('GET', KEYS[1])
+if not raw or redis.call('GET', KEYS[2]) ~= ARGV[1] then return 0 end
+local rec = cjson.decode(raw)
+if rec.refresh_token ~= ARGV[2] then return 0 end
+redis.call('DEL', KEYS[1], KEYS[2])
+redis.call('SREM', KEYS[3], ARGV[1])
+return 1`, []string{sessionKey(subject, sid), refreshKey(subject, refreshToken), userSessionsKey(subject, rec.AccountID)}, sid, refreshToken).Err()
 }
 
 // RevokeAllForUser ends every session of an account in the subject's namespace
@@ -298,8 +530,10 @@ func (SessionStore) RevokeAllForUser(subject string, accountID int64) error {
 		}
 	}
 	// 落库行批量标记 revoked（best-effort，审计用途）
-	_ = db.RevokeAllSessionRowsFor(subject, accountID)
-	return rdbSession.Del(uk).Err()
+	if db.DB != nil {
+		_ = db.RevokeAllSessionRowsFor(subject, accountID)
+	}
+	return nil // Preserve sessions added concurrently after the initial snapshot.
 }
 
 // ListForUser returns every live session of an account in the subject's
@@ -330,11 +564,12 @@ func (SessionStore) ListForUser(subject string, accountID int64) ([]*SessionReco
 // deleteSession removes a record's session key, refresh lookup, and index entry
 // within the subject's namespace.
 func deleteSession(subject string, rec *SessionRecord) error {
-	if err := rdbSession.Del(sessionKey(subject, rec.SessionID)).Err(); err != nil {
-		return err
-	}
-	if err := rdbSession.Del(refreshKey(subject, rec.RefreshToken)).Err(); err != nil {
-		return err
-	}
-	return rdbSession.SRem(userSessionsKey(subject, rec.AccountID), rec.SessionID).Err()
+	return rdbSession.Eval(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local rec = cjson.decode(raw)
+redis.call('DEL', ARGV[1] .. rec.refresh_token)
+redis.call('DEL', KEYS[1])
+redis.call('SREM', KEYS[2], ARGV[2])
+return 1`, []string{sessionKey(subject, rec.SessionID), userSessionsKey(subject, rec.AccountID)}, refreshKey(subject, ""), rec.SessionID).Err()
 }

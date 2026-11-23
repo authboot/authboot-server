@@ -4,8 +4,12 @@ package membership
 
 import (
 	"context"
+	"strconv"
 
+	"github.com/authboot/authboot-server/biz/dal/db"
 	membership "github.com/authboot/authboot-server/biz/model/membership"
+	"github.com/authboot/authboot-server/biz/mw/jwt"
+	"github.com/authboot/authboot-server/pkg/errno"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
@@ -21,7 +25,13 @@ func GetMembership(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(membership.GetMembershipResponse)
+	id, _ := strconv.ParseInt(c.Param("membership_id"), 10, 64)
+	var row db.OrganizationMembership
+	if db.DB.Where("id = ? AND organization_id = ?", id, c.GetInt64(jwt.CtxKeyOrgID)).First(&row).Error != nil {
+		c.AbortWithStatus(403)
+		return
+	}
+	resp := &membership.GetMembershipResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg, Membership: membershipInfo(&row)}
 
 	c.JSON(consts.StatusOK, resp)
 }
@@ -37,7 +47,25 @@ func ListMembers(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(membership.ListMembersResponse)
+	orgID := c.GetInt64(jwt.CtxKeyOrgID)
+	page, size := int(req.Page), int(req.PageSize)
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 20
+	}
+	var total int64
+	var rows []db.OrganizationMembership
+	query := db.DB.Model(&db.OrganizationMembership{}).Where("organization_id = ?", orgID)
+	if query.Count(&total).Error != nil || query.Order("id").Offset((page-1)*size).Limit(size).Find(&rows).Error != nil {
+		c.AbortWithStatus(500)
+		return
+	}
+	resp := &membership.ListMembersResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg, Total: total, Members: make([]*membership.OrganizationMembership, 0, len(rows))}
+	for i := range rows {
+		resp.Members = append(resp.Members, membershipInfo(&rows[i]))
+	}
 
 	c.JSON(consts.StatusOK, resp)
 }
@@ -53,7 +81,21 @@ func RemoveMember(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(membership.RemoveMemberResponse)
+	id, _ := strconv.ParseInt(c.Param("membership_id"), 10, 64)
+	result := db.DB.Where("id = ? AND organization_id = ? AND role <> 'owner'", id, c.GetInt64(jwt.CtxKeyOrgID)).Delete(&db.OrganizationMembership{})
+	if result.Error != nil || result.RowsAffected != 1 {
+		c.AbortWithStatus(403)
+		return
+	}
+	resp := &membership.RemoveMemberResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg}
 
 	c.JSON(consts.StatusOK, resp)
+}
+
+func membershipInfo(row *db.OrganizationMembership) *membership.OrganizationMembership {
+	return &membership.OrganizationMembership{
+		Id: row.ID, OrganizationId: row.OrganizationID, AccountId: row.AccountID,
+		Status: membership.MembershipStatus(row.Status), Role: row.Role,
+		CreatedAt: row.CreatedAt.Unix(), UpdatedAt: row.UpdatedAt.Unix(),
+	}
 }

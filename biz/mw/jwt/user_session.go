@@ -18,6 +18,10 @@ package jwt
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/authboot/authboot-server/biz/dal/db"
+	"github.com/authboot/authboot-server/pkg/clientip"
+	"github.com/cloudwego/hertz/pkg/common/hlog"
 
 	"github.com/cloudwego/hertz/pkg/app"
 )
@@ -45,7 +49,9 @@ func UserSessionAuth() app.HandlerFunc {
 			rejectUnauthorized(c)
 			return
 		}
-		if _, err := sessionStore.Get(SubjectUser, claims.SessionID); err != nil {
+		rec, err := sessionStore.Get(SubjectUser, claims.SessionID)
+		if err != nil || rec.AccountID != claims.UserID || rec.OrganizationID != claims.OrganizationID ||
+			db.ActiveSubject(SubjectUser, claims.UserID, claims.OrganizationID) != nil {
 			rejectUnauthorized(c)
 			return
 		}
@@ -53,6 +59,21 @@ func UserSessionAuth() app.HandlerFunc {
 		c.Set(CtxKeyUserID, claims.UserID)
 		c.Set(CtxKeyOrgID, claims.OrganizationID)
 		c.Set(CtxKeySessionID, claims.SessionID)
+		if active, err := sessionStore.TouchUser(claims.OrganizationID, claims.UserID, claims.SessionID, clientip.FromContext(c)); err != nil {
+			hlog.CtxWarnf(ctx, "user activity update failed: %v", err)
+		} else if active != nil {
+			location, _ := json.Marshal(active.LastActiveLocation)
+			if err := db.DB.Model(&db.UserSessionRow{}).
+				Where("organization_id = ? AND user_id = ? AND session_id = ? AND status = ? AND last_active_at <= ?", active.OrganizationID, active.AccountID, active.SessionID, db.SessionRowActive, active.LastActiveAt).
+				Updates(map[string]interface{}{"last_active_at": active.LastActiveAt, "last_active_ip": active.LastActiveIP, "last_active_location": string(location)}).Error; err != nil {
+				hlog.CtxWarnf(ctx, "persist session activity failed: %v", err)
+			}
+			if err := db.DB.Model(&db.UserDevice{}).
+				Where("organization_id = ? AND user_id = ? AND device_id = ? AND last_active_at <= ?", active.OrganizationID, active.AccountID, active.DeviceID, active.LastActiveAt).
+				Updates(map[string]interface{}{"last_active_at": active.LastActiveAt, "last_active_ip": active.LastActiveIP, "last_active_location": string(location)}).Error; err != nil {
+				hlog.CtxWarnf(ctx, "persist device activity failed: %v", err)
+			}
+		}
 		c.Next(ctx)
 	}
 }

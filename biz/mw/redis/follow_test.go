@@ -16,16 +16,33 @@
 
 package redis
 
-import "testing"
+import (
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v7"
+	"testing"
+)
+
+func initFollowTest(t *testing.T) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	t.Setenv("REDIS_ADDR", server.Addr())
+	t.Setenv("REDIS_PASSWORD", "")
+	InitRedis()
+	t.Cleanup(func() {
+		for _, client := range []*redis.Client{rdbFollows, rdbFavorite, rdbNotification, rdbCode, rdbSession} {
+			_ = client.Close()
+		}
+	})
+}
 
 var rdb Follows
 
 func TestFollows_AddFollow(t *testing.T) {
-	InitRedis()
+	initFollowTest(t)
 	rdb.AddFollower(1001, 1002)
 }
 
 func TestFollows_AddFollower(t *testing.T) {
-	InitRedis()
+	initFollowTest(t)
 	rdb.AddFollow(1002, 1001)
 }

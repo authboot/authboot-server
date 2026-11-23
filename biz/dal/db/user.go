@@ -28,7 +28,8 @@ import (
 const UserTableName = "tb_user"
 
 type User struct {
-	ID int64 `json:"id"`
+	ID             int64 `json:"id"`
+	SessionVersion int64 `json:"-" gorm:"not null;default:0"`
 	// Composite indexes serve the org dashboard's COUNT/SUM aggregates:
 	// idx_users_org_created (org + created_at) for growth windows and
 	// idx_users_org_status (org + status) for the disabled count.
@@ -46,7 +47,7 @@ type User struct {
 	Birthday string `json:"birthday" gorm:"column:birthday;type:varchar(32)"`
 	Bio      string `json:"bio" gorm:"column:bio;type:varchar(512)"`
 	// Status uses the shared constants.StatusEnabled / StatusDisabled values.
-	Status int8 `json:"status" gorm:"column:status;type:tinyint;not null;default:1;index;index:idx_users_org_status,priority:2"`
+	Status    int8  `json:"status" gorm:"column:status;type:tinyint;not null;default:1;index;index:idx_users_org_status,priority:2"`
 	CreatedAt int64 `json:"created_at" gorm:"column:created_at;autoCreateTime;index:idx_users_org_created,priority:2"`
 	UpdatedAt int64 `json:"updated_at" gorm:"column:updated_at;autoUpdateTime"`
 }
@@ -200,6 +201,9 @@ func (d *UserDAO) UpdateUser(user *User) error {
 
 // SetUserStatus sets a user's status within its organization (enabled/disabled).
 func (d *UserDAO) SetUserStatus(organizationID, userID int64, status int) error {
+	if status == constants.StatusDisabled {
+		return MutateUserSecurity(d.db, organizationID, userID, nil, map[string]any{"status": status})
+	}
 	return d.db.Model(&User{}).
 		Where("id = ? AND organization_id = ?", userID, organizationID).
 		Update("status", status).Error
@@ -207,7 +211,5 @@ func (d *UserDAO) SetUserStatus(organizationID, userID int64, status int) error 
 
 // UpdatePassword replaces a user's password hash within its organization.
 func (d *UserDAO) UpdatePassword(organizationID, userID int64, passwordHash string) error {
-	return d.db.Model(&User{}).
-		Where("id = ? AND organization_id = ?", userID, organizationID).
-		Update("password", passwordHash).Error
+	return MutateUserSecurity(d.db, organizationID, userID, nil, map[string]any{"password": passwordHash})
 }

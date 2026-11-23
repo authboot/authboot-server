@@ -1,0 +1,32 @@
+groups:
+  - name: authboot-security
+    rules:
+      - alert: AuthbootRevocationBacklog
+        expr: authboot_revocation_pending > 100
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Authboot session revocation cleanup is accumulating"
+          description: "SQL session versions already reject old sessions. Investigate Redis and the outbox worker."
+      - alert: AuthbootMFAFailures
+        expr: sum(increase(authboot_mfa_failure_total[5m])) > 30
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated Authboot MFA failures"
+      - alert: AuthbootSecurityWorkerFailure
+        expr: sum(increase(authboot_worker_failure_total[5m])) > 0 or sum(increase(authboot_revocation_failure_total[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Authboot security worker is failing"
+      - alert: AuthbootSecurityMetricsUnavailable
+        expr: up{job="authboot-security"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Authboot security metrics scrape failed"

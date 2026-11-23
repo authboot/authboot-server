@@ -109,7 +109,7 @@ func (s *SessionService) GetSession(req *session.GetSessionRequest) (*session.Ge
 		return nil, err
 	}
 	rec, err := sessionStore.Get(jwt.SubjectUser, req.SessionId)
-	if err != nil || rec.AccountID != me {
+	if err != nil || rec.AccountID != me || rec.OrganizationID != s.c.GetInt64(jwt.CtxKeyOrgID) {
 		return nil, errno.AuthorizationFailedErr
 	}
 	return &session.GetSessionResponse{
@@ -126,7 +126,7 @@ func (s *SessionService) RevokeSession(req *session.RevokeSessionRequest) (*sess
 		return nil, err
 	}
 	rec, err := sessionStore.Get(jwt.SubjectUser, req.SessionId)
-	if err != nil || rec.AccountID != me {
+	if err != nil || rec.AccountID != me || rec.OrganizationID != s.c.GetInt64(jwt.CtxKeyOrgID) {
 		return nil, errno.AuthorizationFailedErr
 	}
 	if err := sessionStore.Revoke(jwt.SubjectUser, req.SessionId); err != nil {
@@ -321,14 +321,21 @@ func pageBounds(total int64, page, pageSize int) (int, int) {
 // toSessionProto maps a stored session record to the App-user session view.
 func toSessionProto(rec *redis.SessionRecord) *session.Session {
 	return &session.Session{
-		SessionId:      rec.SessionID,
-		OrganizationId: rec.OrganizationID,
-		UserId:         rec.AccountID,
-		DeviceId:       rec.DeviceID,
-		DeviceName:     rec.DeviceName,
-		Status:         session.SessionStatus_SESSION_STATUS_ACTIVE,
-		CreatedAt:      rec.CreatedAt,
-		ExpiresAt:      rec.ExpiresAt,
+		LastActiveAt:       rec.LastActiveAt,
+		LastActiveIp:       rec.LastActiveIP,
+		LastActiveLocation: LocationProto(rec.LastActiveLocation),
+		UserAgent:          rec.UserAgent,
+		ClientId:           rec.ClientID,
+		Ip:                 rec.IP,
+		Location:           LocationProto(rec.Location),
+		SessionId:          rec.SessionID,
+		OrganizationId:     rec.OrganizationID,
+		UserId:             rec.AccountID,
+		DeviceId:           rec.DeviceID,
+		DeviceName:         rec.DeviceName,
+		Status:             session.SessionStatus_SESSION_STATUS_ACTIVE,
+		CreatedAt:          rec.CreatedAt,
+		ExpiresAt:          rec.ExpiresAt,
 	}
 }
 

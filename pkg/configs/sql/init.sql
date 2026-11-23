@@ -62,6 +62,7 @@ CREATE TABLE `tb_organization_membership` (
   `id`             bigint      NOT NULL AUTO_INCREMENT,
   `organization_id` bigint     NOT NULL,
   `account_id`     bigint      NOT NULL,
+  `role`           varchar(16) NOT NULL DEFAULT 'member',
   `status`         tinyint     NOT NULL DEFAULT '1',
   `created_at`     datetime(3) NOT NULL,
   `updated_at`     datetime(3) NOT NULL,
@@ -350,6 +351,9 @@ CREATE TABLE `tb_admin_sessions` (
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS `tb_user_sessions`;
 CREATE TABLE `tb_user_sessions` (
+  `last_active_ip` varchar(64) DEFAULT NULL,
+  `last_active_location` text DEFAULT NULL,
+  `location`        text DEFAULT NULL,
   `id`              bigint       NOT NULL AUTO_INCREMENT,
   `session_id`      varchar(64)  NOT NULL,
   `organization_id` bigint       NOT NULL,
@@ -395,6 +399,10 @@ CREATE TABLE `tb_admin_devices` (
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS `tb_user_devices`;
 CREATE TABLE `tb_user_devices` (
+  `last_active_at` bigint NOT NULL DEFAULT 0,
+  `last_active_ip` varchar(64) DEFAULT NULL,
+  `last_active_location` text DEFAULT NULL,
+  `last_location`   text DEFAULT NULL,
   `id`              bigint       NOT NULL AUTO_INCREMENT,
   `organization_id` bigint       NOT NULL,
   `user_id`         bigint       NOT NULL,
@@ -437,6 +445,28 @@ CREATE TABLE `tb_organization_legal_doc_versions` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- =====================================================================
+-- App user security events: separate from admin notifications.
+CREATE TABLE IF NOT EXISTS tb_user_security_events (
+  id varchar(64) NOT NULL,
+  organization_id bigint NOT NULL,
+  user_id bigint NOT NULL,
+  session_id varchar(64) DEFAULT NULL,
+  device_id varchar(64) DEFAULT NULL,
+  kind varchar(64) DEFAULT NULL,
+  ip varchar(64) DEFAULT NULL,
+  location text DEFAULT NULL,
+  status varchar(32) DEFAULT NULL,
+  created_at bigint DEFAULT NULL,
+  resolved_at bigint DEFAULT NULL,
+  notify_status varchar(32) DEFAULT NULL,
+  notify_attempts bigint NOT NULL DEFAULT 0,
+  notify_after bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY idx_tb_user_security_events_session_id (session_id),
+  KEY idx_security_owner (organization_id, user_id),
+  KEY idx_tb_user_security_events_notify_status (notify_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- §2 种子数据（表结构全部创建完成后统一初始化）
 -- =====================================================================
 

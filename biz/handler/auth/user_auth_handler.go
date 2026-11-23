@@ -7,6 +7,7 @@ import (
 
 	auth "github.com/authboot/authboot-server/biz/model/auth"
 	service "github.com/authboot/authboot-server/biz/service/auth"
+	"github.com/authboot/authboot-server/pkg/securitymetrics"
 	"github.com/authboot/authboot-server/pkg/utils"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -25,6 +26,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 
 	resp, err := service.NewAuthService(ctx, c).Login(&req)
 	if err != nil {
+		securitymetrics.Add("login_failure_total", 1)
 		base := utils.BuildBaseResp(err)
 		c.JSON(consts.StatusOK, auth.LoginResponse{
 			Code:    base.StatusCode,

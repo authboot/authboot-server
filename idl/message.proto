@@ -14,6 +14,7 @@ enum CaptchaScene {
   CAPTCHA_SCENE_BIND_MOBILE = 3;
   CAPTCHA_SCENE_BIND_EMAIL = 4;
   CAPTCHA_SCENE_RESET_PASSWORD = 5;
+  CAPTCHA_SCENE_DELETE_ACCOUNT = 6;
 }
 
 message CreateCaptchaRequest {

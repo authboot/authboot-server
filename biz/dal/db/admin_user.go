@@ -44,6 +44,8 @@ type AdminUser struct {
 	BackgroundImage string         `json:"background_image"`
 	Signature       string         `json:"signature"`
 	Status          int8           `json:"status" gorm:"column:status;type:tinyint;not null;default:1;index"`
+	MFAEnabled      bool           `json:"-" gorm:"not null;default:false"`
+	MFAGeneration   int64          `json:"-" gorm:"not null;default:0"`
 	Settings        datatypes.JSON `json:"settings" gorm:"column:settings;type:json"`
 	CreatedAt       time.Time      `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt       time.Time      `json:"updated_at" gorm:"autoUpdateTime"`

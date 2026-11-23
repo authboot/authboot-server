@@ -17,24 +17,44 @@
 package utils
 
 import (
+	"errors"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Crypt Encrypt the password using crypto/bcrypt
 func Crypt(password string) (string, error) {
-	// Generate "cost" factor for the bcrypt algorithm
-	cost := 5
+	if !ValidNewPassword(password) {
+		return "", errors.New("password must contain 8 to 72 bytes")
+	}
 
 	// Hash password with bcrypt
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), cost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(hashedPassword), err
+}
+
+func ValidNewPassword(password string) bool {
+	return len(password) >= 8 && len(password) <= 72
 }
 
 // VerifyPassword Verify the password is consistent with the hashed password in the database
 func VerifyPassword(password, hashedPassword string) bool {
+	if len(password) > 72 || password == "" {
+		return false
+	}
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 	if err != nil {
 		return false
 	}
 	return true
+}
+
+// UpgradePassword preserves legacy short passwords only after authentication.
+// The caller must persist the result with a compare-and-swap of the old hash.
+func UpgradePassword(password, hash string) (string, error) {
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil || cost >= bcrypt.DefaultCost || !VerifyPassword(password, hash) {
+		return "", err
+	}
+	upgraded, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(upgraded), err
 }

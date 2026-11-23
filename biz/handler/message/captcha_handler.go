@@ -48,7 +48,12 @@ func VerifyCaptcha(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(message.VerifyCaptchaResponse)
+	resp, err := service.NewMessageService(ctx, c).VerifyCaptcha(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, message.VerifyCaptchaResponse{Code: base.StatusCode, Message: base.StatusMsg})
+		return
+	}
 
 	c.JSON(consts.StatusOK, resp)
 }

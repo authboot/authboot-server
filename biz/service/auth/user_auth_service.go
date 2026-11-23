@@ -22,8 +22,12 @@ import (
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/authboot/authboot-server/biz/mw/oauth"
 	"github.com/authboot/authboot-server/biz/mw/redis"
+	sessionview "github.com/authboot/authboot-server/biz/service/session"
+	"github.com/authboot/authboot-server/pkg/clientip"
 	"github.com/authboot/authboot-server/pkg/constants"
 	"github.com/authboot/authboot-server/pkg/errno"
+	"github.com/authboot/authboot-server/pkg/geoip"
+	"github.com/authboot/authboot-server/pkg/securitymetrics"
 	"github.com/authboot/authboot-server/pkg/utils"
 )
 
@@ -59,8 +63,9 @@ const (
 // email code, SMS code, and 微信 OAuth login. Admin login lives in
 // AdminAuthService.
 type AuthService struct {
-	ctx context.Context
-	c   *app.RequestContext
+	loginIP string
+	ctx     context.Context
+	c       *app.RequestContext
 
 	userDAO         *db.UserDAO
 	userIdentityDAO *db.UserIdentityDAO
@@ -72,6 +77,7 @@ func NewAuthService(ctx context.Context, c *app.RequestContext) *AuthService {
 	return &AuthService{
 		ctx:             ctx,
 		c:               c,
+		loginIP:         clientip.FromContext(c),
 		userDAO:         db.NewUserDAO(db.DB),
 		userIdentityDAO: db.NewUserIdentityDAO(db.DB),
 		organizationDAO: db.IOrganizationDAO,
@@ -97,10 +103,6 @@ func (s *AuthService) Login(req *auth.LoginRequest) (*auth.LoginResponse, error)
 		return nil, err
 	}
 	s.recordLogin(req, u.ID, nil)
-	// 登记设备（best-effort：首见插入，复登更新 last_used_at / login_count）
-	if err := db.UpsertUserDevice(u.OrganizationID, u.ID, req.ClientId, req.DeviceId, req.DeviceName, s.c.ClientIP(), string(s.c.UserAgent()), time.Now().Unix()); err != nil {
-		hlog.CtxErrorf(s.ctx, "upsert user device %s: %v", req.DeviceId, err)
-	}
 	return resp, nil
 }
 
@@ -209,7 +211,7 @@ func (s *AuthService) recordLogin(req *auth.LoginRequest, userID int64, loginErr
 		ClientID:       req.ClientId,
 		DeviceID:       req.DeviceId,
 		DeviceName:     req.DeviceName,
-		IP:             s.c.ClientIP(),
+		IP:             s.loginIP,
 		UserAgent:      string(s.c.UserAgent()),
 		Success:        loginErr == nil,
 		CreatedAt:      time.Now().Unix(),
@@ -278,6 +280,11 @@ func (s *AuthService) loginByPassword(req *auth.LoginRequest) (*db.User, error) 
 	}
 	if !utils.VerifyPassword(req.Password, u.Password) {
 		return nil, errno.PasswordIsNotVerified
+	}
+	if hash, err := utils.UpgradePassword(req.Password, u.Password); err == nil && hash != "" {
+		if err := db.DB.Model(u).Where("id = ? AND organization_id = ? AND password = ?", u.ID, u.OrganizationID, u.Password).Update("password", hash).Error; err != nil {
+			return nil, err
+		}
 	}
 	return u, nil
 }
@@ -379,7 +386,7 @@ func (s *AuthService) Register(req *auth.RegisterRequest) (*auth.LoginResponse, 
 // account password. This is the only register flow where Credential means a
 // password: it is bcrypt-hashed and stored on the user.
 func (s *AuthService) registerByPassword(req *auth.RegisterRequest) (*auth.LoginResponse, error) {
-	if req.IdentityValue == "" || req.Credential == "" {
+	if req.IdentityValue == "" || !utils.ValidNewPassword(req.Credential) {
 		return nil, errno.ParamErr
 	}
 	passwordHash, err := utils.Crypt(req.Credential)
@@ -467,11 +474,14 @@ func (s *AuthService) RefreshToken(req *auth.RefreshTokenRequest) (*auth.LoginRe
 	if req.RefreshToken == "" {
 		return nil, errno.ParamErr
 	}
-	rec, err := sessionStore.Rotate(jwt.SubjectUser, req.RefreshToken, redis.DefaultSessionTTL)
+	rec, err := sessionStore.ByRefresh(jwt.SubjectUser, req.RefreshToken)
 	if err != nil {
 		if errors.Is(err, redis.ErrSessionNotFound) {
 			return nil, errno.AuthorizationFailedErr
 		}
+		return nil, err
+	}
+	if err := db.ActiveSubject(jwt.SubjectUser, rec.AccountID, rec.OrganizationID); err != nil {
 		return nil, err
 	}
 	u, err := s.userDAO.QueryUserByIdInOrg(rec.OrganizationID, rec.AccountID)
@@ -482,8 +492,11 @@ func (s *AuthService) RefreshToken(req *auth.RefreshTokenRequest) (*auth.LoginRe
 	if err != nil {
 		return nil, err
 	}
+	rec, err = sessionStore.Rotate(jwt.SubjectUser, req.RefreshToken, redis.DefaultSessionTTL)
+	if err != nil {
+		return nil, errno.AuthorizationFailedErr
+	}
 
-	now := time.Now().Unix()
 	return &auth.LoginResponse{
 		Code:                  errno.SuccessCode,
 		Message:               errno.SuccessMsg,
@@ -493,15 +506,22 @@ func (s *AuthService) RefreshToken(req *auth.RefreshTokenRequest) (*auth.LoginRe
 		AccessTokenExpiresAt:  accessExp,
 		RefreshTokenExpiresAt: rec.ExpiresAt,
 		Session: &session.Session{
-			SessionId:      rec.SessionID,
-			OrganizationId: rec.OrganizationID,
-			UserId:         rec.AccountID,
-			DeviceId:       rec.DeviceID,
-			DeviceName:     rec.DeviceName,
-			Status:         session.SessionStatus_SESSION_STATUS_ACTIVE,
-			CreatedAt:      rec.CreatedAt,
-			ExpiresAt:      accessExp,
-			LastActiveAt:   now,
+			Current:            true,
+			LastActiveIp:       rec.LastActiveIP,
+			LastActiveLocation: sessionview.LocationProto(rec.LastActiveLocation),
+			UserAgent:          rec.UserAgent,
+			ClientId:           rec.ClientID,
+			Ip:                 rec.IP,
+			Location:           sessionview.LocationProto(rec.Location),
+			SessionId:          rec.SessionID,
+			OrganizationId:     rec.OrganizationID,
+			UserId:             rec.AccountID,
+			DeviceId:           rec.DeviceID,
+			DeviceName:         rec.DeviceName,
+			Status:             session.SessionStatus_SESSION_STATUS_ACTIVE,
+			CreatedAt:          rec.CreatedAt,
+			ExpiresAt:          rec.ExpiresAt,
+			LastActiveAt:       rec.LastActiveAt,
 		},
 	}, nil
 }
@@ -510,10 +530,21 @@ func (s *AuthService) RefreshToken(req *auth.RefreshTokenRequest) (*auth.LoginRe
 // refresh token is deleted immediately, and the short-lived access token
 // expires on its own shortly after. Revoking a missing session is a no-op.
 func (s *AuthService) Logout(req *auth.LogoutRequest) (*auth.LogoutResponse, error) {
-	if req.SessionId != "" {
-		if err := sessionStore.Revoke(jwt.SubjectUser, req.SessionId); err != nil {
-			return nil, err
-		}
+	uid := s.c.GetInt64(jwt.CtxKeyUserID)
+	org := s.c.GetInt64(jwt.CtxKeyOrgID)
+	sid := req.SessionId
+	if sid == "" {
+		sid = s.c.GetString(jwt.CtxKeySessionID)
+	}
+	if uid == 0 || sid == "" {
+		return nil, errno.AuthorizationFailedErr
+	}
+	rec, err := sessionStore.Get(jwt.SubjectUser, sid)
+	if err != nil || rec.AccountID != uid || rec.OrganizationID != org {
+		return nil, errno.AuthorizationFailedErr
+	}
+	if err := sessionStore.Revoke(jwt.SubjectUser, sid); err != nil {
+		return nil, err
 	}
 	return &auth.LogoutResponse{
 		Code:    errno.SuccessCode,
@@ -529,6 +560,14 @@ func (s *AuthService) ValidateToken(req *auth.ValidateTokenRequest) (*auth.Valid
 		return nil, errno.ParamErr
 	}
 	claims, err := jwt.ParseUserToken(req.AccessToken)
+	if err == nil {
+		rec, sessionErr := sessionStore.Get(jwt.SubjectUser, claims.SessionID)
+		if sessionErr != nil || rec.AccountID != claims.UserID || rec.OrganizationID != claims.OrganizationID {
+			err = errno.AuthorizationFailedErr
+		} else {
+			err = db.ActiveSubject(jwt.SubjectUser, claims.UserID, claims.OrganizationID)
+		}
+	}
 	if err != nil {
 		return &auth.ValidateTokenResponse{
 			Code:    errno.AuthorizationFailedErrCode,
@@ -630,12 +669,15 @@ func (s *AuthService) recordUserAudit(u *db.User, action, resourceType, resource
 // already set the old one must match; accounts created via OAuth / code only
 // have no password and must use ResetPassword instead.
 func (s *AuthService) ChangePassword(req *auth.ChangePasswordRequest) (*auth.ChangePasswordResponse, error) {
-	if req.NewPassword == "" {
+	if !utils.ValidNewPassword(req.NewPassword) {
 		return nil, errno.ParamErr
 	}
 	u, err := s.currentUser()
 	if err != nil {
 		return nil, err
+	}
+	if !(redis.Code{}).Allow(fmt.Sprintf("password-proof:user:%d:%d", u.OrganizationID, u.ID), 5, 5*time.Minute) {
+		return nil, errno.AuthorizationFailedErr
 	}
 	if u.Password == "" {
 		return nil, errno.PasswordNotSetErr
@@ -648,7 +690,7 @@ func (s *AuthService) ChangePassword(req *auth.ChangePasswordRequest) (*auth.Cha
 	if err != nil {
 		return nil, err
 	}
-	if err := s.userDAO.UpdatePassword(u.OrganizationID, u.ID, hash); err != nil {
+	if err := db.MutateUserSecurity(db.DB, u.OrganizationID, u.ID, &u.Password, map[string]any{"password": hash}); err != nil {
 		return nil, err
 	}
 	s.recordUserAudit(u, "user.password.change", "password", "", true, "")
@@ -659,7 +701,7 @@ func (s *AuthService) ChangePassword(req *auth.ChangePasswordRequest) (*auth.Cha
 // email/phone and replaces the account password. Every existing session is
 // revoked afterwards, so a compromised account is signed out everywhere.
 func (s *AuthService) ResetPassword(req *auth.ResetPasswordRequest) (*auth.ResetPasswordResponse, error) {
-	if req.OrganizationId == 0 || req.IdentityValue == "" || req.Credential == "" || req.NewPassword == "" {
+	if req.OrganizationId == 0 || req.IdentityValue == "" || req.Credential == "" || !utils.ValidNewPassword(req.NewPassword) {
 		return nil, errno.ParamErr
 	}
 	identityType := identityTypeOf(req.IdentityType)
@@ -688,11 +730,8 @@ func (s *AuthService) ResetPassword(req *auth.ResetPasswordRequest) (*auth.Reset
 	if err := s.userDAO.UpdatePassword(u.OrganizationID, u.ID, hash); err != nil {
 		return nil, err
 	}
-	// Password reset invalidates every device (best-effort: the reset itself
-	// already committed, and session guards fail closed if redis is down).
-	if err := sessionStore.RevokeAllForUser(jwt.SubjectUser, u.ID); err != nil {
-		hlog.CtxErrorf(s.ctx, "reset password: revoke user %d sessions: %v", u.ID, err)
-	}
+	// The committed version invalidates old sessions immediately; the durable
+	// outbox cleans Redis asynchronously without touching subsequent logins.
 	s.recordUserAudit(u, "user.password.reset", "password", "", true, "")
 	return &auth.ResetPasswordResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg}, nil
 }
@@ -711,16 +750,15 @@ func (s *AuthService) DeleteAccount(req *auth.DeleteAccountRequest) (*auth.Delet
 		return nil, errno.AuthorizationFailedErr
 	}
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := db.MutateUserSecurity(tx, u.OrganizationID, u.ID, &u.Password, map[string]any{"status": constants.StatusDisabled}); err != nil {
+			return err
+		}
 		if err := tx.Where("organization_id = ? AND user_id = ?", u.OrganizationID, u.ID).
 			Delete(&db.UserIdentity{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("organization_id = ? AND user_id = ?", u.OrganizationID, u.ID).
 			Delete(&db.UserAddress{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("user_id = ?", u.ID).
-			Delete(&db.Notification{}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&db.User{}).
@@ -734,14 +772,12 @@ func (s *AuthService) DeleteAccount(req *auth.DeleteAccountRequest) (*auth.Delet
 				"bio":              "",
 				"birthday":         "",
 				"gender":           int8(0),
+				"settings":         "{}",
 				"status":           constants.StatusDisabled,
 			}).Error
 	})
 	if err != nil {
 		return nil, err
-	}
-	if err := sessionStore.RevokeAllForUser(jwt.SubjectUser, u.ID); err != nil {
-		hlog.CtxErrorf(s.ctx, "delete account: revoke user %d sessions: %v", u.ID, err)
 	}
 	s.recordUserAudit(u, "user.account.delete", "account", strconv.FormatInt(u.ID, 10), true, "")
 	return &auth.DeleteAccountResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg}, nil
@@ -750,6 +786,9 @@ func (s *AuthService) DeleteAccount(req *auth.DeleteAccountRequest) (*auth.Delet
 // verifyDeleteOwnership accepts either the account password or a one-time code
 // that must be bound to THIS user's identity.
 func (s *AuthService) verifyDeleteOwnership(u *db.User, req *auth.DeleteAccountRequest) bool {
+	if !(redis.Code{}).Allow(fmt.Sprintf("delete-proof:user:%d:%d", u.OrganizationID, u.ID), 5, 5*time.Minute) {
+		return false
+	}
 	if req.Password != "" && u.Password != "" && utils.VerifyPassword(req.Password, u.Password) {
 		return true
 	}
@@ -842,7 +881,14 @@ func (s *AuthService) createUserWithIdentity(organizationID int64, identityType,
 // refresh token), signs a short-lived access token bound to that session, and
 // assembles the login response with a session descriptor for the current device.
 func (s *AuthService) buildLoginResponse(u *db.User, clientID int64, deviceID, deviceName string) (*auth.LoginResponse, error) {
-	rec, err := sessionStore.Create(jwt.SubjectUser, u.ID, u.OrganizationID, deviceID, deviceName, redis.DefaultSessionTTL)
+	if err := db.ActiveSubject(jwt.SubjectUser, u.ID, u.OrganizationID); err != nil {
+		return nil, err
+	}
+	meta := redis.LoginMetadata{SessionVersion: u.SessionVersion, IP: s.loginIP, UserAgent: string(s.c.UserAgent()), ClientID: clientID, Location: geoip.Resolve(s.loginIP)}
+	if meta.Location.Status == "unavailable" {
+		securitymetrics.Add("geoip_unavailable_total", 1)
+	}
+	rec, err := sessionStore.Create(jwt.SubjectUser, u.ID, u.OrganizationID, deviceID, deviceName, redis.DefaultSessionTTL, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -852,7 +898,16 @@ func (s *AuthService) buildLoginResponse(u *db.User, clientID int64, deviceID, d
 	}
 
 	now := time.Now().Unix()
+	eventIDs := []string{}
+	event, securityErr := db.RecordSecurityLogin(&db.UserDevice{OrganizationID: u.OrganizationID, UserID: u.ID, ClientID: clientID, DeviceID: deviceID, DeviceName: deviceName, LastIP: meta.IP, UserAgent: meta.UserAgent, LastLocation: meta.Location, CreatedAt: now, LastUsedAt: now, LastActiveAt: now, LastActiveIP: meta.IP, LastActiveLocation: meta.Location, LoginCount: 1}, rec.SessionID)
+	if securityErr != nil {
+		hlog.CtxErrorf(s.ctx, "record user login security: %v", securityErr)
+	} else if event != nil {
+		eventIDs = append(eventIDs, event.ID)
+	}
+	sessionview.RetrySecurityNotifications(s.ctx, u.OrganizationID, u.ID)
 	return &auth.LoginResponse{
+		SecurityEventIds:      eventIDs,
 		Code:                  errno.SuccessCode,
 		Message:               errno.SuccessMsg,
 		User:                  toUserInfo(u),
@@ -861,16 +916,22 @@ func (s *AuthService) buildLoginResponse(u *db.User, clientID int64, deviceID, d
 		AccessTokenExpiresAt:  accessExp,
 		RefreshTokenExpiresAt: rec.ExpiresAt,
 		Session: &session.Session{
-			SessionId:      rec.SessionID,
-			OrganizationId: u.OrganizationID,
-			UserId:         u.ID,
-			ClientId:       clientID,
-			DeviceId:       deviceID,
-			DeviceName:     deviceName,
-			Status:         session.SessionStatus_SESSION_STATUS_ACTIVE,
-			CreatedAt:      now,
-			ExpiresAt:      accessExp,
-			LastActiveAt:   now,
+			Current:            true,
+			LastActiveIp:       rec.LastActiveIP,
+			LastActiveLocation: sessionview.LocationProto(rec.LastActiveLocation),
+			UserAgent:          rec.UserAgent,
+			SessionId:          rec.SessionID,
+			OrganizationId:     u.OrganizationID,
+			UserId:             u.ID,
+			ClientId:           clientID,
+			Ip:                 rec.IP,
+			Location:           sessionview.LocationProto(rec.Location),
+			DeviceId:           deviceID,
+			DeviceName:         deviceName,
+			Status:             session.SessionStatus_SESSION_STATUS_ACTIVE,
+			CreatedAt:          now,
+			ExpiresAt:          rec.ExpiresAt,
+			LastActiveAt:       now,
 		},
 	}, nil
 }

@@ -4,6 +4,7 @@ package auth
 
 import (
 	auth "github.com/authboot/authboot-server/biz/handler/auth"
+	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/cloudwego/hertz/pkg/app/server"
 )
 
@@ -15,6 +16,11 @@ import (
 
 // Register register routes based on the IDL 'api.${HTTP Method}' annotation.
 func Register(r *server.Hertz) {
+	r.POST("/api/v1/admin/auth/mfa/verify", auth.AdminMFA("verify"))
+	r.POST("/api/v1/admin/auth/step-up", jwt.AdminSessionAuth(), auth.AdminMFA("step-up"))
+	for _, action := range []string{"setup", "confirm", "disable", "recovery"} {
+		r.POST("/api/v1/admin/auth/mfa/"+action, jwt.AdminSessionAuth(), auth.AdminMFA(action))
+	}
 
 	root := r.Group("/", rootMw()...)
 	{

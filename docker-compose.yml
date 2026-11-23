@@ -92,7 +92,7 @@ services:
     # 因此应用必须使用 host 网络，才能同时访问 mysql / redis / minio。
     network_mode: host
     volumes:
-      # 日志按 ./hlog/logs/<date>.log 落盘，挂载出来便于查看与保留
+      # 日志写入 ./hlog/logs/app.log，按大小切割，历史文件名带切割时间；挂载出来便于查看与保留
       - ./hlog:/app/hlog
       # 运行期要读 pkg/configs/casbin/model.conf（镜像内未打包，直接从源码目录挂载）
       - ./pkg/configs:/app/pkg/configs:ro

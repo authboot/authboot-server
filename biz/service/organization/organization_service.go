@@ -26,6 +26,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+	"gorm.io/gorm"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
 	"github.com/authboot/authboot-server/biz/model/common"
@@ -48,9 +49,10 @@ type OrganizationService struct {
 // NewOrganizationService create organization service
 func NewOrganizationService(ctx context.Context, c *app.RequestContext) *OrganizationService {
 	return &OrganizationService{
-		ctx:             ctx,
-		c:               c,
-		organizationDAO: db.IOrganizationDAO,
+		ctx:                       ctx,
+		c:                         c,
+		organizationDAO:           db.IOrganizationDAO,
+		organizationMembershipDAO: db.IOrganizationMembershipDAO,
 	}
 }
 
@@ -62,7 +64,19 @@ func (s *OrganizationService) CreateOrganization(req *organization.CreateOrganiz
 		Logo:   utils.NormalizeMinioRef(req.Logo),
 		Status: constants.StatusEnabled,
 	}
-	if _, err := s.organizationDAO.CreateOrganization(org); err != nil {
+	accountID := s.c.GetInt64("current_user_id")
+	if accountID <= 0 {
+		return nil, errno.AuthorizationFailedErr
+	}
+	if err := db.DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := db.NewOrganizationDAO(tx).CreateOrganization(org); err != nil {
+			return err
+		}
+		_, err := db.NewOrganizationMembershipDAO(tx).CreateMembership(&db.OrganizationMembership{
+			OrganizationID: org.ID, AccountID: accountID, Role: "owner", Status: db.MembershipActive,
+		})
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	audit.Annotate(s.c, func(e *audit.Entry) {
@@ -77,8 +91,11 @@ func (s *OrganizationService) CreateOrganization(req *organization.CreateOrganiz
 
 // ListOrganizations returns all organizations (organization view).
 func (s *OrganizationService) ListOrganizations() ([]*organization.Organization, error) {
-	orgs, err := s.organizationDAO.ListOrganizations()
-	if err != nil {
+	var orgs []*db.Organization
+	if err := db.DB.Model(&db.Organization{}).
+		Joins("JOIN tb_organization_membership m ON m.organization_id = tb_organization.id").
+		Where("m.account_id = ? AND m.status = ?", s.c.GetInt64("current_user_id"), db.MembershipActive).
+		Select("tb_organization.*").Order("tb_organization.id").Find(&orgs).Error; err != nil {
 		return nil, err
 	}
 	infos := make([]*organization.Organization, 0, len(orgs))
@@ -221,6 +238,10 @@ func (s *OrganizationService) LeaveOrganization(req *organization.LeaveOrganizat
 	}
 
 	// 删除当前账号在该组织的成员关系；不是成员则返回 MembershipNotExistErr
+	m, err := s.organizationMembershipDAO.QueryMembership(req.OrganizationId, accountID)
+	if err != nil || m.Role == "owner" {
+		return errno.AuthorizationFailedErr
+	}
 	return s.organizationMembershipDAO.LeaveOrganization(req.OrganizationId, accountID)
 }
 

@@ -32,6 +32,23 @@ message Session {
   int64 created_at = 8;
   int64 expires_at = 9;
   int64 last_active_at = 10;
+  string ip = 11;
+  IPLocation location = 12;
+  bool current = 13;
+  string last_active_ip = 14;
+  IPLocation last_active_location = 15;
+  string user_agent = 16;
+}
+
+// 首次创建该 session 时的 IP 近似地区，不代表设备 GPS 或实时位置。
+message IPLocation {
+  string country_code = 1;
+  string country = 2;
+  string region = 3;
+  string city = 4;
+  string display = 5;
+  string source = 6;
+  string status = 7;
 }
 
 // 平台管理员会话：归属 Platform Account (account_id)，与 client 无关。

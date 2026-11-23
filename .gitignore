@@ -28,8 +28,8 @@ _testmain.go
 *.sublime-project
 *.sublime-workspace
 !.gitkeep
-.DS_Store
 /.idea
+/.claude
 /.vscode
 /output
 *.local.yml
@@ -37,3 +37,5 @@ dumped_hertz_remote_config.json
 .env
 .env.*
 !.env.example
+*.xdb
+*.mmdb

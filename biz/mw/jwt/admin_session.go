@@ -19,6 +19,8 @@ package jwt
 import (
 	"context"
 
+	"github.com/authboot/authboot-server/biz/dal/db"
+
 	"github.com/cloudwego/hertz/pkg/app"
 )
 
@@ -45,7 +47,10 @@ func AdminSessionAuth() app.HandlerFunc {
 			rejectUnauthorized(c)
 			return
 		}
-		if _, err := sessionStore.Get(SubjectAdmin, claims.SessionID); err != nil {
+		rec, err := sessionStore.Get(SubjectAdmin, claims.SessionID)
+		if err != nil || rec.AccountID != claims.AdminID ||
+			db.CheckAdminMFAGeneration(claims.AdminID, rec.MFAGeneration) != nil ||
+			db.ActiveSubject(SubjectAdmin, claims.AdminID, claims.OrganizationID) != nil {
 			rejectUnauthorized(c)
 			return
 		}
@@ -53,6 +58,15 @@ func AdminSessionAuth() app.HandlerFunc {
 		c.Set(CtxKeyUserID, claims.AdminID)
 		c.Set(CtxKeyOrgID, claims.OrganizationID)
 		c.Set(CtxKeySessionID, claims.SessionID)
+		if !authorizeAdminResource(c, claims.AdminID, claims.OrganizationID) {
+			c.AbortWithStatus(403)
+			return
+		}
+		installAuthorizedBinding(c)
+		if !consumeAdminStepUp(c) {
+			c.AbortWithStatus(403)
+			return
+		}
 		c.Next(ctx)
 	}
 }

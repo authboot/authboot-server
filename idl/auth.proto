@@ -76,6 +76,7 @@ message LoginResponse {
   int64 access_token_expires_at = 6[(api.go_tag)='json:"access_token_expires_at"'];
   int64 refresh_token_expires_at = 7[(api.go_tag)='json:"refresh_token_expires_at"'];
   session.Session session = 8[(api.go_tag)='json:"session"'];
+  repeated string security_event_ids = 9[(api.go_tag)='json:"security_event_ids"'];
 }
 
 message RefreshTokenRequest {
@@ -144,6 +145,9 @@ message DeleteAccountResponse {
 
 // User 普通用户认证服务：所有接口以 organization 为边界
 service UserAuthHandler {
+  rpc UserStepUp(UserStepUpRequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/user/auth/step-up";
+  }
   rpc Login(LoginRequest) returns(LoginResponse) {
     option (api.post) = "/api/v1/user/auth/login";
   }
@@ -206,6 +210,9 @@ message AdminLoginResponse {
   string refresh_token = 6[(api.go_tag)='json:"refresh_token"'];
   int64 access_token_expires_at = 7[(api.go_tag)='json:"access_token_expires_at"'];
   int64 refresh_token_expires_at = 8[(api.go_tag)='json:"refresh_token_expires_at"'];
+  bool mfa_required = 9[(api.go_tag)='json:"mfa_required"'];
+  string mfa_challenge_token = 10[(api.go_tag)='json:"mfa_challenge_token"'];
+  int64 mfa_challenge_expires_at = 11[(api.go_tag)='json:"mfa_challenge_expires_at"'];
 }
 
 message AdminRefreshTokenRequest {
@@ -249,6 +256,24 @@ message SwitchOrganizationResponse {
 
 // 平台管理员认证服务：基于 Platform Account，与 User 用户认证完全隔离
 service AdminAuthHandler {
+  rpc VerifyAdminMFA(AdminMFARequest) returns(AdminLoginResponse) {
+    option (api.post) = "/api/v1/admin/auth/mfa/verify";
+  }
+  rpc AdminStepUp(AdminMFARequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/admin/auth/step-up";
+  }
+  rpc SetupAdminMFA(AdminMFARequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/admin/auth/mfa/setup";
+  }
+  rpc ConfirmAdminMFA(AdminMFARequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/admin/auth/mfa/confirm";
+  }
+  rpc DisableAdminMFA(AdminMFARequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/admin/auth/mfa/disable";
+  }
+  rpc RotateAdminMFARecovery(AdminMFARequest) returns(SecurityActionResponse) {
+    option (api.post) = "/api/v1/admin/auth/mfa/recovery";
+  }
   rpc AdminLogin(AdminLoginRequest) returns(AdminLoginResponse) {
     option (api.post) = "/api/v1/admin/auth/login";
   }
@@ -268,4 +293,32 @@ service AdminAuthHandler {
   rpc SwitchOrganization(SwitchOrganizationRequest) returns(SwitchOrganizationResponse) {
     option (api.post) = "/api/v1/admin/auth/switch-organization";
   }
+}
+
+// X-Step-Up-Token is carried in the HTTP header for protected actions.
+message AdminMFARequest {
+  string password = 1;
+  string code = 2;
+  bool recovery = 3;
+  string challenge_token = 4;
+  string scope = 5;
+}
+
+message UserStepUpRequest {
+  string password = 1;
+  string identity_type = 2;
+  string identity_value = 3;
+  string credential = 4;
+  string scope = 5;
+}
+
+message SecurityActionResponse {
+  int32 code = 1;
+  string message = 2;
+  string step_up_token = 3;
+  int64 expires_at = 4;
+  string secret = 5;
+  string otpauth_uri = 6;
+  repeated string recovery_codes = 7;
+  bool reauthentication_required = 8;
 }

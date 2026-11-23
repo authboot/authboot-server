@@ -77,11 +77,13 @@ func (s *smtpSender) Send(ctx context.Context, msg *Message) error {
 		deadline = d
 	}
 
-	client, err := s.dial(addr, deadline)
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	client, cleanup, err := s.dial(ctx, addr, deadline)
 	if err != nil {
 		return fmt.Errorf("email/smtp: dial %s: %w", addr, err)
 	}
-	defer client.Close()
+	defer cleanup()
 
 	// Upgrade to TLS via STARTTLS when not already on an implicit-TLS socket.
 	if !s.cfg.UseTLS {
@@ -126,21 +128,35 @@ func (s *smtpSender) Send(ctx context.Context, msg *Message) error {
 }
 
 // dial opens an SMTP client, using an implicit TLS socket when UseTLS is set.
-func (s *smtpSender) dial(addr string, deadline time.Time) (*smtp.Client, error) {
+func (s *smtpSender) dial(ctx context.Context, addr string, deadline time.Time) (*smtp.Client, func(), error) {
 	netDialer := &net.Dialer{Deadline: deadline}
-
+	var conn net.Conn
+	var err error
 	if s.cfg.UseTLS {
-		conn, err := tls.DialWithDialer(netDialer, "tcp", addr, &tls.Config{ServerName: s.cfg.Host})
-		if err != nil {
-			return nil, err
-		}
-		return smtp.NewClient(conn, s.cfg.Host)
+		dialer := &tls.Dialer{NetDialer: netDialer, Config: &tls.Config{ServerName: s.cfg.Host}}
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = netDialer.DialContext(ctx, "tcp", addr)
 	}
-
-	conn, err := netDialer.Dial("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	_ = conn.SetDeadline(deadline)
-	return smtp.NewClient(conn, s.cfg.Host)
+	return smtpClient(ctx, conn, s.cfg.Host, deadline)
+}
+
+// Set the deadline before reading the greeting, for BOTH TLS and plaintext.
+// It remains on the underlying socket through STARTTLS and all SMTP commands.
+func smtpClient(ctx context.Context, conn net.Conn, host string, deadline time.Time) (*smtp.Client, func(), error) {
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	cleanup := func() { stop(); _ = conn.Close() }
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	return client, cleanup, nil
 }

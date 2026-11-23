@@ -7,6 +7,7 @@ import (
 
 	auth "github.com/authboot/authboot-server/biz/model/auth"
 	service "github.com/authboot/authboot-server/biz/service/auth"
+	"github.com/authboot/authboot-server/pkg/securitymetrics"
 	"github.com/authboot/authboot-server/pkg/utils"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -25,6 +26,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 
 	resp, err := service.NewAdminAuthService(ctx, c).AdminLogin(&req)
 	if err != nil {
+		securitymetrics.Add("login_failure_total", 1)
 		base := utils.BuildBaseResp(err)
 		c.JSON(consts.StatusOK, auth.LoginResponse{
 			Code:    base.StatusCode,
@@ -47,7 +49,12 @@ func AdminRefreshToken(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(auth.AdminLoginResponse)
+	resp, err := service.NewAdminAuthService(ctx, c).AdminRefreshToken(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, auth.AdminLoginResponse{Code: base.StatusCode, Message: base.StatusMsg})
+		return
+	}
 
 	c.JSON(consts.StatusOK, resp)
 }
@@ -111,7 +118,12 @@ func SwitchOrganization(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(auth.SwitchOrganizationResponse)
+	resp, err := service.NewAdminAuthService(ctx, c).SwitchOrganization(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, auth.SwitchOrganizationResponse{Code: base.StatusCode, Message: base.StatusMsg})
+		return
+	}
 
 	c.JSON(consts.StatusOK, resp)
 }

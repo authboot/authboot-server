@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/authboot/authboot-server/pkg/constants"
+	"github.com/authboot/authboot-server/pkg/geoip"
 )
 
 // Device registry: one row per (account, device), upserted on every login and
@@ -48,17 +49,21 @@ func (AdminDevice) TableName() string { return constants.AdminDeviceTableName }
 // UserDevice is one App-user's registered device, symmetric to AdminDevice but
 // org-scoped (an App user always belongs to one organization).
 type UserDevice struct {
-	ID             int64  `json:"id" gorm:"primaryKey;autoIncrement"`
-	OrganizationID int64  `json:"organization_id" gorm:"column:organization_id;not null;index"`
-	UserID         int64  `json:"user_id" gorm:"column:user_id;not null;uniqueIndex:uk_user_device;index"`
-	DeviceID       string `json:"device_id" gorm:"column:device_id;type:varchar(64);not null;uniqueIndex:uk_user_device"`
-	DeviceName     string `json:"device_name" gorm:"column:device_name;type:varchar(128)"`
-	ClientID       int64  `json:"client_id" gorm:"column:client_id"`
-	LastIP         string `json:"last_ip" gorm:"column:last_ip;type:varchar(64)"`
-	UserAgent      string `json:"user_agent" gorm:"column:user_agent;type:varchar(255)"`
-	LoginCount     int64  `json:"login_count" gorm:"column:login_count;not null;default:1"`
-	CreatedAt      int64  `json:"created_at" gorm:"column:created_at;not null"`
-	LastUsedAt     int64  `json:"last_used_at" gorm:"column:last_used_at;not null;index"`
+	LastActiveAt       int64          `json:"last_active_at" gorm:"not null;default:0"`
+	LastActiveIP       string         `json:"last_active_ip" gorm:"type:varchar(64)"`
+	LastActiveLocation geoip.Location `json:"last_active_location" gorm:"serializer:json;type:text"`
+	LastLocation       geoip.Location `json:"last_location" gorm:"serializer:json;type:text"`
+	ID                 int64          `json:"id" gorm:"primaryKey;autoIncrement"`
+	OrganizationID     int64          `json:"organization_id" gorm:"column:organization_id;not null;index"`
+	UserID             int64          `json:"user_id" gorm:"column:user_id;not null;uniqueIndex:uk_user_device;index"`
+	DeviceID           string         `json:"device_id" gorm:"column:device_id;type:varchar(64);not null;uniqueIndex:uk_user_device"`
+	DeviceName         string         `json:"device_name" gorm:"column:device_name;type:varchar(128)"`
+	ClientID           int64          `json:"client_id" gorm:"column:client_id"`
+	LastIP             string         `json:"last_ip" gorm:"column:last_ip;type:varchar(64)"`
+	UserAgent          string         `json:"user_agent" gorm:"column:user_agent;type:varchar(255)"`
+	LoginCount         int64          `json:"login_count" gorm:"column:login_count;not null;default:1"`
+	CreatedAt          int64          `json:"created_at" gorm:"column:created_at;not null"`
+	LastUsedAt         int64          `json:"last_used_at" gorm:"column:last_used_at;not null;index"`
 }
 
 // TableName defines the table name for the UserDevice struct.
@@ -92,21 +97,23 @@ func UpsertAdminDevice(accountID int64, deviceID, deviceName, ip, userAgent stri
 
 // UpsertUserDevice records a login from a user device, symmetric to
 // UpsertAdminDevice.
-func UpsertUserDevice(organizationID, userID, clientID int64, deviceID, deviceName, ip, userAgent string, now int64) error {
+func UpsertUserDevice(organizationID, userID, clientID int64, deviceID, deviceName, ip, userAgent string, now int64, location geoip.Location) error {
 	if deviceID == "" {
 		return nil
 	}
 	return DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "device_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"device_name":  deviceName,
-			"client_id":    clientID,
-			"last_ip":      ip,
-			"user_agent":   userAgent,
-			"login_count":  gorm.Expr("login_count + 1"),
-			"last_used_at": now,
+			"last_location": gorm.Expr("VALUES(last_location)"),
+			"device_name":   deviceName,
+			"client_id":     clientID,
+			"last_ip":       ip,
+			"user_agent":    userAgent,
+			"login_count":   gorm.Expr("login_count + 1"),
+			"last_used_at":  now,
 		}),
 	}).Create(&UserDevice{
+		LastLocation:   location,
 		OrganizationID: organizationID,
 		UserID:         userID,
 		DeviceID:       deviceID,

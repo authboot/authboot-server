@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -70,8 +69,6 @@ func (s *AdminAuthService) AdminLogin(req *auth.AdminLoginRequest) (*auth.AdminL
 		return nil, err
 	}
 
-	fmt.Println(utils.Crypt(req.Password))
-
 	if ok := utils.VerifyPassword(req.Password, user.Password); !ok {
 		audit.Record(s.c, &audit.Entry{
 			Action:  "admin.login",
@@ -83,12 +80,24 @@ func (s *AdminAuthService) AdminLogin(req *auth.AdminLoginRequest) (*auth.AdminL
 		recordAdminLogin(user.ID, req.Email, false, "password mismatch")
 		return nil, errno.PasswordIsNotVerified
 	}
+	if hash, err := utils.UpgradePassword(req.Password, user.Password); err == nil && hash != "" {
+		if err := db.DB.Model(user).Where("id = ? AND password = ?", user.ID, user.Password).Update("password", hash).Error; err != nil {
+			return nil, err
+		}
+		user.Password = hash
+	}
 
 	// Open a server-side admin session. Login does NOT bind an organization:
+	if err := db.ActiveSubject(jwt.SubjectAdmin, user.ID, 0); err != nil {
+		return nil, err
+	}
+	if user.MFAEnabled {
+		return s.newMFAChallenge(user, req)
+	}
 	// the account may belong to several orgs, so the token is issued org-unbound
 	// (organization id 0 = platform/unbound) and the caller picks an org via
 	// SwitchOrganization, which re-scopes the token to that org.
-	rec, err := sessionStore.Create(jwt.SubjectAdmin, user.ID, 0, req.DeviceId, req.DeviceName, redis.DefaultSessionTTL)
+	rec, err := sessionStore.Create(jwt.SubjectAdmin, user.ID, 0, req.DeviceId, req.DeviceName, redis.DefaultSessionTTL, redis.LoginMetadata{MFAGeneration: user.MFAGeneration})
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +133,7 @@ func (s *AdminAuthService) AdminRefreshToken(req *auth.AdminRefreshTokenRequest)
 	if req.RefreshToken == "" {
 		return nil, errno.ParamErr
 	}
-	rec, err := sessionStore.Rotate(jwt.SubjectAdmin, req.RefreshToken, redis.DefaultSessionTTL)
+	rec, err := sessionStore.ByRefresh(jwt.SubjectAdmin, req.RefreshToken)
 	if err != nil {
 		if errors.Is(err, redis.ErrSessionNotFound) {
 			audit.Record(s.c, &audit.Entry{
@@ -136,9 +145,19 @@ func (s *AdminAuthService) AdminRefreshToken(req *auth.AdminRefreshTokenRequest)
 		}
 		return nil, err
 	}
+	if err := db.ActiveSubject(jwt.SubjectAdmin, rec.AccountID, rec.OrganizationID); err != nil {
+		return nil, err
+	}
+	if err := db.CheckAdminMFAGeneration(rec.AccountID, rec.MFAGeneration); err != nil {
+		return nil, errno.AuthorizationFailedErr
+	}
 	accessToken, accessExp, err := jwt.GenerateAdminAccessToken(rec.AccountID, rec.OrganizationID, rec.SessionID, s.adminAccessTTL(rec.OrganizationID))
 	if err != nil {
 		return nil, err
+	}
+	rec, err = sessionStore.Rotate(jwt.SubjectAdmin, req.RefreshToken, redis.DefaultSessionTTL)
+	if err != nil {
+		return nil, errno.AuthorizationFailedErr
 	}
 
 	audit.Record(s.c, &audit.Entry{
@@ -159,18 +178,29 @@ func (s *AdminAuthService) AdminRefreshToken(req *auth.AdminRefreshTokenRequest)
 }
 
 // AdminLogout ends the admin session by revoking its server-side record. The
-// session id is taken from the authenticated token (set by SessionAuth), not
-// from the request body, so an admin can only log out their own session. The
-// refresh token is deleted immediately and the short-lived access token expires
-// on its own shortly after. Revoking a missing session is a no-op.
+// session defaults to the authenticated session; an explicit id must belong
+// to the same platform account. Unknown and foreign sessions fail identically.
 func (s *AdminAuthService) AdminLogout(req *auth.AdminLogoutRequest) (*auth.AdminLoginResponse, error) {
-	sid := s.currentSessionID()
-	if sid != "" {
-		if err := sessionStore.Revoke(jwt.SubjectAdmin, sid); err != nil {
-			return nil, err
+	adminID, err := s.currentAccountID()
+	if err != nil || adminID <= 0 {
+		return nil, errno.AuthorizationFailedErr
+	}
+	sid := req.SessionId
+	if sid == "" {
+		sid = s.currentSessionID()
+	}
+	rec, err := sessionStore.Get(jwt.SubjectAdmin, sid)
+	if err != nil || rec.AccountID != adminID {
+		return nil, errno.AuthorizationFailedErr
+	}
+	if sid != s.currentSessionID() {
+		if err := db.ConsumeSecurityGrant(db.DB, string(s.c.GetHeader("X-Step-Up-Token")), db.SecurityGrant{Subject: jwt.SubjectAdmin, AccountID: adminID, OrganizationID: s.c.GetInt64(jwt.CtxKeyOrgID), SessionID: s.currentSessionID(), Scope: "session:revoke"}, time.Now()); err != nil {
+			return nil, errno.AuthorizationFailedErr
 		}
 	}
-	adminID, _ := s.currentAccountID()
+	if err := sessionStore.Revoke(jwt.SubjectAdmin, sid); err != nil {
+		return nil, err
+	}
 	audit.Record(s.c, &audit.Entry{
 		Action:    "admin.logout",
 		AdminID:   adminID,
@@ -191,6 +221,14 @@ func (s *AdminAuthService) ValidateAdminToken(req *auth.ValidateAdminTokenReques
 		return nil, errno.ParamErr
 	}
 	claims, err := jwt.ParseAdminToken(req.AccessToken)
+	if err == nil {
+		rec, sessionErr := sessionStore.Get(jwt.SubjectAdmin, claims.SessionID)
+		if sessionErr != nil || rec.AccountID != claims.AdminID || db.CheckAdminMFAGeneration(claims.AdminID, rec.MFAGeneration) != nil {
+			err = errno.AuthorizationFailedErr
+		} else {
+			err = db.ActiveSubject(jwt.SubjectAdmin, claims.AdminID, claims.OrganizationID)
+		}
+	}
 	if err != nil {
 		return &auth.ValidateAdminTokenResponse{
 			Code:    errno.AuthorizationFailedErrCode,
@@ -224,6 +262,9 @@ func (s *AdminAuthService) SwitchOrganization(req *auth.SwitchOrganizationReques
 	}
 	accountID, err := s.currentAccountID()
 	if err != nil {
+		return nil, err
+	}
+	if err := db.ActiveSubject(jwt.SubjectAdmin, accountID, req.OrganizationId); err != nil {
 		return nil, err
 	}
 

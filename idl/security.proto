@@ -1,0 +1,74 @@
+syntax = "proto3";
+package security;
+option go_package = "security";
+import "api.proto";
+import "session.proto";
+
+message PageRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+message Device {
+  string device_id = 1;
+  string device_name = 2;
+  bool current = 3;
+  int64 last_login_at = 4;
+  int64 last_active_at = 5;
+  string ip = 6;
+  session.IPLocation location = 7;
+  string last_active_ip = 8;
+  session.IPLocation last_active_location = 9;
+  int32 active_sessions = 10;
+  string status = 11;
+  string browser = 12;
+  string os = 13;
+}
+message DevicesResponse {
+  int32 code = 1;
+  string message = 2;
+  repeated Device devices = 3;
+  int64 total = 4;
+}
+message Event {
+  string id = 1;
+  string session_id = 2;
+  string device_id = 3;
+  string kind = 4;
+  string ip = 5;
+  session.IPLocation location = 6;
+  string status = 7;
+  int64 created_at = 8;
+  int64 resolved_at = 9;
+  string notify_status = 10;
+}
+message EventsResponse {
+  int32 code = 1;
+  string message = 2;
+  repeated Event events = 3;
+  int64 total = 4;
+}
+message RevokeRequest {
+  string mode = 1; // others | device
+  string device_id = 2;
+}
+message ActionResponse {
+  int32 code = 1;
+  string message = 2;
+  int64 revoked_sessions = 3;
+  bool change_password_required = 4;
+}
+message ConfirmRequest {
+  string event_id = 1;
+  string decision = 2; // me | not_me
+  string password = 3;
+  string identity_type = 4; // email | phone
+  string identity_value = 5;
+  string credential = 6; // existing login-scene one-time code
+}
+service SecurityHandler {
+ rpc Devices(PageRequest) returns(DevicesResponse) { option (api.get) = "/api/v1/me/security/devices"; }
+ rpc Events(PageRequest) returns(EventsResponse) { option (api.get) = "/api/v1/me/security/events"; }
+ rpc Sessions(PageRequest) returns(session.ListSessionsResponse) { option (api.get) = "/api/v1/me/security/sessions"; }
+ rpc Revoke(RevokeRequest) returns(ActionResponse) { option (api.post) = "/api/v1/me/security/revoke"; }
+ rpc Confirm(ConfirmRequest) returns(ActionResponse) { option (api.post) = "/api/v1/me/security/confirm"; }
+}

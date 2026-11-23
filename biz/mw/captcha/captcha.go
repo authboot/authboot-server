@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/authboot/authboot-server/biz/mw/redis"
 	"github.com/mojocn/base64Captcha"
 )
 
@@ -77,7 +78,7 @@ func Setup(cfg Config) {
 	cfg = withDefaults(cfg)
 	expiration = cfg.Expiration
 
-	store := base64Captcha.NewMemoryStore(base64Captcha.GCLimitNumber, cfg.Expiration)
+	store := redis.CaptchaStore{TTL: cfg.Expiration}
 	defaultCaptcha = base64Captcha.NewCaptcha(newDriver(cfg), store)
 }
 

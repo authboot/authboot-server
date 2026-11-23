@@ -17,6 +17,7 @@
 package redis
 
 import (
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v7"
@@ -31,20 +32,36 @@ const codeKeyPrefix = "code:"
 // consumed on the first successful Verify to prevent replay.
 type Code struct{}
 
+// NormalizeCodeTarget canonicalizes contact addresses for delivery and code lookup.
+// Phone numbers retain their explicit country prefix.
+func NormalizeCodeTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if strings.Contains(target, "@") {
+		return strings.ToLower(target)
+	}
+	return target
+}
+
 // codeKey builds the redis key holding the code for a scene (e.g. "login") and
 // target (the email address or phone number the code was sent to).
 func codeKey(scene, target string) string {
+	// Captcha grants use opaque, case-sensitive tokens rather than contacts.
+	if scene != "captcha_grant" {
+		target = NormalizeCodeTarget(target)
+	}
 	return codeKeyPrefix + scene + ":" + target
 }
 
 // Store saves a verification code for the (scene, target) pair with the given
-// TTL, overwriting any previous unexpired code. A no-op (nil) when redis is not
-// initialized, so callers degrade gracefully in environments without redis.
+// TTL, overwriting any previous unexpired code. Uninitialized Redis fails closed.
 func (Code) Store(scene, target, code string, ttl time.Duration) error {
 	if rdbCode == nil {
-		return nil
+		return ErrSessionStoreUnavailable
 	}
-	return rdbCode.Set(codeKey(scene, target), code, ttl).Err()
+	return rdbCode.Eval(`
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+redis.call('DEL', KEYS[2])
+return 1`, []string{codeKey(scene, target), codeKey(scene, target) + ":attempts"}, code, ttl.Milliseconds()).Err()
 }
 
 // Verify checks a submitted code against the stored one. On a match the code is
@@ -55,13 +72,35 @@ func (Code) Verify(scene, target, code string) bool {
 		return false
 	}
 	key := codeKey(scene, target)
-	stored, err := rdbCode.Get(key).Result()
-	if err == redis.Nil || err != nil {
+	n, err := redis.NewScript(`
+local value = redis.call('GET', KEYS[1])
+if not value then return 0 end
+if value == ARGV[1] then
+ redis.call('DEL', KEYS[1], KEYS[2])
+ return 1
+end
+local attempts = redis.call('INCR', KEYS[2])
+redis.call('PEXPIRE', KEYS[2], redis.call('PTTL', KEYS[1]))
+if attempts >= 5 then redis.call('DEL', KEYS[1]) end
+return 0`).Run(rdbCode, []string{key, key + ":attempts"}, code).Int()
+	return err == nil && n == 1
+}
+
+// Discard removes only the failed delivery's code, never a later replacement.
+func (Code) Discard(scene, target, code string) {
+	if rdbCode != nil {
+		rdbCode.Eval(`if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`, []string{codeKey(scene, target)}, code)
+	}
+}
+
+// Allow applies a fixed-window limit atomically and fails closed.
+func (Code) Allow(key string, limit int, window time.Duration) bool {
+	if rdbCode == nil {
 		return false
 	}
-	if stored != code {
-		return false
-	}
-	rdbCode.Del(key)
-	return true
+	n, err := rdbCode.Eval(`
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return n`, []string{"rate:" + key}, window.Milliseconds()).Int()
+	return err == nil && n <= limit
 }

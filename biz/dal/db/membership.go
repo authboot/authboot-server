@@ -21,10 +21,14 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/authboot/authboot-server/biz/model/membership"
 	"github.com/authboot/authboot-server/pkg/errno"
 )
 
 const organizationMembershipTableName = "tb_organization_membership"
+
+// MembershipActive matches the membership protocol status, not the generic enabled status.
+const MembershipActive int8 = int8(membership.MembershipStatus_MEMBERSHIP_STATUS_ACTIVE)
 
 // OrganizationMembership is the join record binding a platform account to an
 // organization. Mirrors biz/model/membership.OrganizationMembership.
@@ -33,6 +37,7 @@ type OrganizationMembership struct {
 	OrganizationID int64     `json:"organization_id" gorm:"column:organization_id;not null;uniqueIndex:uk_org_account;index:idx_membership_org_status,priority:1"`
 	AccountID      int64     `json:"account_id" gorm:"column:account_id;not null;uniqueIndex:uk_org_account"`
 	Status         int8      `json:"status" gorm:"type:tinyint;not null;default:1;index;index:idx_membership_org_status,priority:2"`
+	Role           string    `json:"role" gorm:"type:varchar(16);not null;default:member"`
 	CreatedAt      time.Time `json:"created_at" gorm:"not null"`
 	UpdatedAt      time.Time `json:"updated_at" gorm:"not null"`
 }

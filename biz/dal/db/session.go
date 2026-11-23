@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/authboot/authboot-server/pkg/constants"
+	"github.com/authboot/authboot-server/pkg/geoip"
 )
 
 // Session persistence: Redis (biz/mw/redis/session.go) remains the hot path for
@@ -53,19 +54,22 @@ func (AdminSessionRow) TableName() string { return constants.AdminSessionTableNa
 // UserSessionRow is one App-user login session (one device), symmetric to
 // AdminSessionRow but org-bound (an App user always belongs to one org).
 type UserSessionRow struct {
-	ID             int64  `json:"id" gorm:"primaryKey;autoIncrement"`
-	SessionID      string `json:"session_id" gorm:"column:session_id;type:varchar(64);not null;uniqueIndex"`
-	OrganizationID int64  `json:"organization_id" gorm:"column:organization_id;not null;index"`
-	UserID         int64  `json:"user_id" gorm:"column:user_id;not null;index;index:idx_user_session_user,priority:1"`
-	ClientID       int64  `json:"client_id" gorm:"column:client_id"`
-	DeviceID       string `json:"device_id" gorm:"column:device_id;type:varchar(64)"`
-	DeviceName     string `json:"device_name" gorm:"column:device_name;type:varchar(128)"`
-	IP             string `json:"ip" gorm:"column:ip;type:varchar(64)"`
-	UserAgent      string `json:"user_agent" gorm:"column:user_agent;type:varchar(255)"`
-	Status         int8   `json:"status" gorm:"column:status;type:tinyint;not null;default:1;index"` // 1 active / 2 revoked
-	CreatedAt      int64  `json:"created_at" gorm:"column:created_at;not null"`
-	ExpiresAt      int64  `json:"expires_at" gorm:"column:expires_at;not null;index;index:idx_user_session_user,priority:2"`
-	LastActiveAt   int64  `json:"last_active_at" gorm:"column:last_active_at;not null"`
+	LastActiveIP       string         `json:"last_active_ip" gorm:"type:varchar(64)"`
+	LastActiveLocation geoip.Location `json:"last_active_location" gorm:"serializer:json;type:text"`
+	Location           geoip.Location `json:"location" gorm:"serializer:json;type:text"`
+	ID                 int64          `json:"id" gorm:"primaryKey;autoIncrement"`
+	SessionID          string         `json:"session_id" gorm:"column:session_id;type:varchar(64);not null;uniqueIndex"`
+	OrganizationID     int64          `json:"organization_id" gorm:"column:organization_id;not null;index"`
+	UserID             int64          `json:"user_id" gorm:"column:user_id;not null;index;index:idx_user_session_user,priority:1"`
+	ClientID           int64          `json:"client_id" gorm:"column:client_id"`
+	DeviceID           string         `json:"device_id" gorm:"column:device_id;type:varchar(64)"`
+	DeviceName         string         `json:"device_name" gorm:"column:device_name;type:varchar(128)"`
+	IP                 string         `json:"ip" gorm:"column:ip;type:varchar(64)"`
+	UserAgent          string         `json:"user_agent" gorm:"column:user_agent;type:varchar(255)"`
+	Status             int8           `json:"status" gorm:"column:status;type:tinyint;not null;default:1;index"` // 1 active / 2 revoked
+	CreatedAt          int64          `json:"created_at" gorm:"column:created_at;not null"`
+	ExpiresAt          int64          `json:"expires_at" gorm:"column:expires_at;not null;index;index:idx_user_session_user,priority:2"`
+	LastActiveAt       int64          `json:"last_active_at" gorm:"column:last_active_at;not null"`
 }
 
 // TableName defines the table name for the UserSessionRow struct.

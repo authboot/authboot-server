@@ -19,7 +19,8 @@
 // outcome); services enrich a row with semantic detail via Annotate (resource,
 // before/after) or log one-shot events (login/logout) via Record. Rows are
 // written asynchronously in batches; if the queue is full it falls back to a
-// synchronous write so a security event is never dropped.
+// synchronous write so a security event is never dropped. A row the database
+// refuses is not dropped either: it goes to the application log (see writer.go).
 package audit
 
 import (
@@ -28,10 +29,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/hertz-contrib/requestid"
-
-	"github.com/authboot/authboot-server/biz/dal/db"
 )
 
 // ctxEntryKey holds the in-flight *Entry that Middleware creates and Annotate enriches.
@@ -214,47 +212,6 @@ func worker() {
 				}
 			}
 		}
-	}
-}
-
-// writeBatch persists entries. A DB error is logged, not returned: auditing
-// must never break the request path.
-func writeBatch(entries []*Entry) {
-	if len(entries) == 0 {
-		return
-	}
-	now := time.Now()
-	rows := make([]*db.AdminAuditLog, 0, len(entries))
-	for _, e := range entries {
-		action := e.Action
-		if action == "" {
-			action = e.Method + " " + e.Path
-		}
-		rows = append(rows, &db.AdminAuditLog{
-			RequestID:      e.RequestID,
-			TraceID:        e.TraceID,
-			AdminID:        e.AdminID,
-			OrganizationID: e.OrganizationID,
-			SessionID:      e.SessionID,
-			Action:         action,
-			ResourceType:   e.ResourceType,
-			ResourceID:     e.ResourceID,
-			Method:         e.Method,
-			Path:           e.Path,
-			IP:             e.IP,
-			UserAgent:      e.UserAgent,
-			Success:        e.Success,
-			StatusCode:     e.StatusCode,
-			ErrMsg:         e.ErrMsg,
-			Before:         e.Before,
-			After:          e.After,
-			Extra:          e.Extra,
-			LatencyMs:      e.LatencyMs,
-			CreatedAt:      now,
-		})
-	}
-	if err := db.InsertAuditLogs(rows); err != nil {
-		hlog.Errorf("audit: failed to write %d log(s): %v", len(rows), err)
 	}
 }
 
