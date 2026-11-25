@@ -1,16 +1,8 @@
 package user
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-	"io"
-	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
@@ -19,11 +11,9 @@ import (
 	"github.com/authboot/authboot-server/biz/model/common"
 	"github.com/authboot/authboot-server/biz/model/user"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
-	"github.com/authboot/authboot-server/biz/mw/minio"
 	"github.com/authboot/authboot-server/pkg/constants"
 	"github.com/authboot/authboot-server/pkg/errno"
 	"github.com/authboot/authboot-server/pkg/utils"
-	miniogo "github.com/minio/minio-go/v7"
 )
 
 // pagination defaults / bounds for ListUsers.
@@ -170,6 +160,31 @@ func (s *UserService) UpdateUser(req *user.UpdateUserRequest) (*user.UpdateUserR
 	}, nil
 }
 
+// UploadUserAvatar stores an avatar image uploaded by an admin on behalf of a
+// user in the organization. The user is looked up inside the organization the
+// admin was authorized for, so a user of another organization is never touched.
+func (s *UserService) UploadUserAvatar(req *user.GetUserRequest) (*user.UpdateUserResponse, error) {
+	if req.OrganizationId == 0 || req.UserId == 0 {
+		return nil, errno.ParamErr
+	}
+	u, err := s.userDAO.QueryUserByIdInOrg(req.OrganizationId, req.UserId)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.storeAvatar(u); err != nil {
+		return nil, err
+	}
+	info, err := s.buildUserInfo(u)
+	if err != nil {
+		return nil, err
+	}
+	return &user.UpdateUserResponse{
+		Code:    errno.SuccessCode,
+		Message: errno.SuccessMsg,
+		User:    info,
+	}, nil
+}
+
 // DisableUser disables a user within an organization.
 func (s *UserService) DisableUser(req *user.DisableUserRequest) (*user.DisableUserResponse, error) {
 	if req.OrganizationId == 0 || req.UserId == 0 {
@@ -298,66 +313,12 @@ func (s *UserService) UpdateMyProfile(req *user.UpdateMyProfileRequest) (*user.U
 	}, nil
 }
 
-const maxAvatarBytes = 5 << 20
-
-// validateAvatar checks decoded content rather than trusting the filename or MIME header.
-func validateAvatar(data []byte) (string, error) {
-	if len(data) == 0 || len(data) > maxAvatarBytes {
-		return "", errno.ParamErr
-	}
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 16_000_000 {
-		return "", errno.ParamErr
-	}
-	switch format {
-	case "jpeg", "png", "gif":
-	default:
-		return "", errno.ParamErr
-	}
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		return "", errno.ParamErr
-	}
-	return format, nil
-}
-
 func (s *UserService) UploadMyAvatar(_ *user.UploadMyAvatarRequest) (*user.UploadMyAvatarResponse, error) {
 	u, err := s.currentUser()
 	if err != nil {
 		return nil, err
 	}
-	file, err := s.c.FormFile("avatar")
-	if err != nil || file.Size <= 0 || file.Size > maxAvatarBytes {
-		return nil, errno.ParamErr
-	}
-	reader, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-	data, err := io.ReadAll(io.LimitReader(reader, maxAvatarBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	format, err := validateAvatar(data)
-	if err != nil {
-		return nil, err
-	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, err
-	}
-	key := fmt.Sprintf("avatar-%d-%d-%x.%s", u.OrganizationID, u.ID, nonce, format)
-	if minio.Client == nil {
-		return nil, fmt.Errorf("avatar storage is unavailable")
-	}
-	if _, err := minio.Client.PutObject(s.ctx, constants.MinioImgBucketName, key,
-		bytes.NewReader(data), int64(len(data)), miniogo.PutObjectOptions{ContentType: "image/" + format}); err != nil {
-		return nil, err
-	}
-	u.Avatar = constants.MinioImgBucketName + "/" + key
-	if err := s.userDAO.UpdateAvatar(u.OrganizationID, u.ID, u.Avatar); err != nil {
-		// Only remove this newly uploaded object; existing avatars may still be referenced.
-		_ = minio.Client.RemoveObject(s.ctx, constants.MinioImgBucketName, key, miniogo.RemoveObjectOptions{})
+	if err := s.storeAvatar(u); err != nil {
 		return nil, err
 	}
 	profile := s.profile(u)
@@ -366,12 +327,27 @@ func (s *UserService) UploadMyAvatar(_ *user.UploadMyAvatarRequest) (*user.Uploa
 	}, nil
 }
 
-// avatarURL preserves externally supplied URLs and converts our stored image keys.
-func (s *UserService) avatarURL(avatar string) string {
-	if strings.HasPrefix(avatar, constants.MinioImgBucketName+"/") && minio.Client != nil {
-		return utils.URLconvert(s.ctx, s.c, avatar)
+// storeAvatar validates and stores the multipart "avatar" image of the current
+// request (utils.StoreAvatarUpload), then points the user's row at the new
+// object. It is shared by the self-service and admin uploads; on success
+// u.Avatar holds the stored "bucket/key" reference.
+func (s *UserService) storeAvatar(u *db.User) error {
+	ref, remove, err := utils.StoreAvatarUpload(s.ctx, s.c, fmt.Sprintf("avatar-%d-%d", u.OrganizationID, u.ID))
+	if err != nil {
+		return err
 	}
-	return avatar
+	if err := s.userDAO.UpdateAvatar(u.OrganizationID, u.ID, ref); err != nil {
+		// Only remove this newly uploaded object; existing avatars may still be referenced.
+		remove()
+		return err
+	}
+	u.Avatar = ref
+	return nil
+}
+
+// avatarURL turns a stored avatar reference into the URL clients should load.
+func (s *UserService) avatarURL(avatar string) string {
+	return utils.AvatarURL(avatar)
 }
 
 func (s *UserService) profile(u *db.User) *user.UserProfile {

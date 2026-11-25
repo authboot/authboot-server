@@ -26,7 +26,9 @@ func securityLog(ctx context.Context, operation string, err error) {
 // Login calls it after committing events. A lease and bounded attempts permit
 // later logins to retry failures without promising exactly-once delivery.
 func RetrySecurityNotifications(ctx context.Context, org, user int64) {
-	retrySecurityNotifications(ctx, org, user, email.Send)
+	retrySecurityNotifications(ctx, org, user, func(ctx context.Context, msg *email.Message) error {
+		return email.SendFor(ctx, org, msg)
+	})
 }
 func retrySecurityNotifications(ctx context.Context, org, user int64, send func(context.Context, *email.Message) error) {
 	var events []db.UserSecurityEvent

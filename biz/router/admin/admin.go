@@ -25,6 +25,7 @@ func Register(r *server.Hertz) {
 				_admin := _v1.Group("/admin", _adminMw()...)
 				_admin.GET("/me", append(_getmyprofileMw(), admin.GetMyProfile)...)
 				_me := _admin.Group("/me", _meMw()...)
+				_me.POST("/avatar", append(_uploadmyavatarMw(), admin.UploadMyAvatar)...)
 				_me.GET("/settings", append(_getmysettingsMw(), admin.GetMySettings)...)
 				_me.PUT("/settings", append(_updatemysettingsMw(), admin.UpdateMySettings)...)
 				_admin.PUT("/me", append(_updatemyprofileMw(), admin.UpdateMyProfile)...)

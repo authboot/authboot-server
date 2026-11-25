@@ -35,15 +35,11 @@ func ActiveSubject(subject string, accountID, orgID int64) error {
 	return nil
 }
 
-// RoleAllows is an explicit minimal permission map. Members have no management
-// access; admins manage business resources; only owners manage organization
-// lifecycle, memberships and role grants.
+// All backend membership roles share admin permissions within their active workspace.
 func RoleAllows(role, permission string) bool {
 	switch role {
-	case "owner":
+	case "owner", "admin", "member":
 		return permission == "resource:read" || permission == "resource:write" || permission == "organization:manage" || permission == "member:manage"
-	case "admin":
-		return permission == "resource:read" || permission == "resource:write"
 	default:
 		return false
 	}

@@ -38,9 +38,12 @@ func setRole(ctx context.Context, c *app.RequestContext) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&org, orgID).Error; err != nil {
 			return err
 		}
-		var owner db.OrganizationMembership
-		if err := tx.Where("organization_id = ? AND account_id = ? AND role = 'owner' AND status = ?", orgID, actor, db.MembershipActive).First(&owner).Error; err != nil {
+		var membership db.OrganizationMembership
+		if err := tx.Where("organization_id = ? AND account_id = ? AND status = ?", orgID, actor, db.MembershipActive).First(&membership).Error; err != nil {
 			return err
+		}
+		if !db.RoleAllows(membership.Role, "member:manage") {
+			return gorm.ErrRecordNotFound
 		}
 		// Owner demotion/removal is not part of this first-batch API. This keeps
 		// at least the existing owner and prevents concurrent last-owner loss.

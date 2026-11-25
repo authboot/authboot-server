@@ -63,6 +63,13 @@ func _updateuserMw() []app.HandlerFunc {
 	}
 }
 
+func _uploaduseravatarMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		audit.Middleware(),
+		// casbin.RequireOrg("user:update"),
+	}
+}
+
 func _disableuserMw() []app.HandlerFunc {
 	return []app.HandlerFunc{
 		audit.Middleware(),

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/authboot/authboot-server/biz/mw/email/provider"
@@ -37,6 +36,10 @@ type (
 // defaultSender is the process-wide adapter selected by Init. Business code
 // sends mail through the package-level Send, staying decoupled from the vendor.
 var defaultSender Sender
+
+// defaultProviderID is the id of the provider Init selected from .env; the
+// catalog flags it as the platform default.
+var defaultProviderID string
 
 // Init selects and initializes the email provider from environment variables.
 // It is intended to be called once at startup, alongside the other mw Init()s.
@@ -58,71 +61,76 @@ var defaultSender Sender
 //
 //	RESEND_API_KEY   required, e.g. re_xxx
 //	RESEND_FROM      default From address, e.g. "Authboot <no-reply@authboot.io>"
+//
+// Alibaba Cloud DirectMail (EMAIL_PROVIDER=aliyun_dm):
+//
+//	ALIYUN_DM_ACCESS_KEY_ID / ALIYUN_DM_ACCESS_KEY_SECRET   required
+//	ALIYUN_DM_REGION          optional, default cn-hangzhou
+//	ALIYUN_DM_SENDER_ADDRESS  required, verified sender address
+//	ALIYUN_DM_SENDER_NAME     optional display name
+//
+// Tencent Cloud SES (EMAIL_PROVIDER=tencent_ses):
+//
+//	TENCENT_SES_SECRET_ID / TENCENT_SES_SECRET_KEY   required
+//	TENCENT_SES_REGION          required, e.g. ap-guangzhou
+//	TENCENT_SES_SENDER_ADDRESS  required, e.g. "Acme <noreply@mail.example.com>"
+//	TENCENT_SES_TEMPLATE_ID     optional approved template id
 func Init() {
 	name := strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")))
 	if name == "" {
 		name = "smtp"
 	}
 
-	sender, err := buildSender(name)
+	sender, err := Build(name, settingsFromEnv(name))
 	if err != nil {
 		log.Fatalf("email 初始化失败: %v", err)
 	}
 	defaultSender = sender
+	defaultProviderID = name
 	log.Printf("email provider initialized: %s", sender.Name())
 }
 
-// buildSender constructs the Sender for the given provider id. Add new cases
-// here to wire up additional adapters (ses, sendgrid, mailgun, ...).
-func buildSender(name string) (Sender, error) {
+// DefaultProviderID returns the provider id selected from .env by Init.
+func DefaultProviderID() string { return defaultProviderID }
+
+// settingsFromEnv maps the legacy per-vendor env vars onto the registry's
+// settings keys so the .env path and the per-organization path share one
+// construction routine.
+func settingsFromEnv(name string) map[string]string {
 	switch name {
 	case "smtp":
-		return newSMTPSenderFromEnv()
-	case "resend":
-		return newResendSenderFromEnv()
-	default:
-		return nil, fmt.Errorf("unsupported EMAIL_PROVIDER %q", name)
-	}
-}
-
-// newSMTPSenderFromEnv reads SMTP_* env vars into a provider.SMTPConfig.
-func newSMTPSenderFromEnv() (Sender, error) {
-	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
-	if host == "" {
-		return nil, fmt.Errorf("SMTP_HOST is not set")
-	}
-
-	port := 587
-	if p := strings.TrimSpace(os.Getenv("SMTP_PORT")); p != "" {
-		v, err := strconv.Atoi(p)
-		if err != nil {
-			return nil, fmt.Errorf("invalid SMTP_PORT %q: %w", p, err)
+		return map[string]string{
+			"host":     os.Getenv("SMTP_HOST"),
+			"port":     os.Getenv("SMTP_PORT"),
+			"username": os.Getenv("SMTP_USERNAME"),
+			"password": os.Getenv("SMTP_PASSWORD"),
+			"from":     os.Getenv("SMTP_FROM"),
+			"use_tls":  os.Getenv("SMTP_USE_TLS"),
 		}
-		port = v
+	case "resend":
+		return map[string]string{
+			"api_key": os.Getenv("RESEND_API_KEY"),
+			"from":    os.Getenv("RESEND_FROM"),
+		}
+	case "aliyun_dm":
+		return map[string]string{
+			"access_key_id":     os.Getenv("ALIYUN_DM_ACCESS_KEY_ID"),
+			"access_key_secret": os.Getenv("ALIYUN_DM_ACCESS_KEY_SECRET"),
+			"region":            os.Getenv("ALIYUN_DM_REGION"),
+			"sender_address":    os.Getenv("ALIYUN_DM_SENDER_ADDRESS"),
+			"sender_name":       os.Getenv("ALIYUN_DM_SENDER_NAME"),
+		}
+	case "tencent_ses":
+		return map[string]string{
+			"secret_id":      os.Getenv("TENCENT_SES_SECRET_ID"),
+			"secret_key":     os.Getenv("TENCENT_SES_SECRET_KEY"),
+			"region":         os.Getenv("TENCENT_SES_REGION"),
+			"sender_address": os.Getenv("TENCENT_SES_SENDER_ADDRESS"),
+			"template_id":    os.Getenv("TENCENT_SES_TEMPLATE_ID"),
+		}
+	default:
+		return nil
 	}
-
-	useTLS := strings.EqualFold(strings.TrimSpace(os.Getenv("SMTP_USE_TLS")), "true")
-
-	return provider.NewSMTPSender(provider.SMTPConfig{
-		Host:     host,
-		Port:     port,
-		Username: strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-		Password: os.Getenv("SMTP_PASSWORD"),
-		From:     strings.TrimSpace(os.Getenv("SMTP_FROM")),
-		UseTLS:   useTLS,
-	}), nil
-}
-
-// newResendSenderFromEnv reads RESEND_* env vars into a provider.ResendConfig.
-func newResendSenderFromEnv() (Sender, error) {
-	apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
-	if apiKey == "" {
-		return nil, fmt.Errorf("RESEND_API_KEY is not set")
-	}
-	return provider.NewResendSender(provider.ResendConfig{
-		APIKey: apiKey,
-		From:   strings.TrimSpace(os.Getenv("RESEND_FROM")),
-	}), nil
 }
 
 // Send delivers a message through the process-wide provider configured by Init.

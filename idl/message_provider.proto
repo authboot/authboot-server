@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package messageprovider;
+
+import "api.proto";
+
+option go_package = "messageprovider";
+
+// ============================================================
+// 消息供应商（邮件 / 短信）按 Organization 配置
+//   1. 后端维护供应商注册表（目录），声明每个供应商需要哪些字段，前端据此渲染表单。
+//   2. 平台管理员为某个 Organization 配置某供应商的凭证；保存接口内部先做真实
+//      发送校验，校验通过才落库并启用，同一通道下只允许一个启用的供应商。
+//   3. 发信时按 Organization 解析启用的供应商，没有配置则回退到 .env 的平台默认。
+// ============================================================
+
+// 供应商表单字段声明。
+message ProviderField {
+  string name = 1 [(api.go_tag)='json:"name"'];
+  string label = 2 [(api.go_tag)='json:"label"'];
+  // secret 字段读取时脱敏，保存时留空表示沿用已存值。
+  bool secret = 3 [(api.go_tag)='json:"secret"'];
+  bool required = 4 [(api.go_tag)='json:"required"'];
+  string placeholder = 5 [(api.go_tag)='json:"placeholder"'];
+  // 字段类型：text / password / number / boolean。
+  string type = 6 [(api.go_tag)='json:"type"'];
+}
+
+// 目录中的一个供应商。
+message ProviderDescriptor {
+  // 通道：email / sms。
+  string channel = 1 [(api.go_tag)='json:"channel"'];
+  // 供应商标识，小写，如 "resend" / "smtp"。
+  string provider = 2 [(api.go_tag)='json:"provider"'];
+  string name = 3 [(api.go_tag)='json:"name"'];
+  string description = 4 [(api.go_tag)='json:"description"'];
+  repeated ProviderField fields = 5 [(api.go_tag)='json:"fields"'];
+  // 该供应商是否为 .env 配置的平台默认服务。
+  bool platform_default = 6 [(api.go_tag)='json:"platform_default"'];
+}
+
+// 某 Organization 已保存的供应商配置（secret 字段脱敏）。
+message ProviderConfig {
+  int64 organization_id = 1 [(api.go_tag)='json:"organization_id"'];
+  string channel = 2 [(api.go_tag)='json:"channel"'];
+  string provider = 3 [(api.go_tag)='json:"provider"'];
+  map<string, string> settings = 4 [(api.go_tag)='json:"settings"'];
+  bool enabled = 5 [(api.go_tag)='json:"enabled"'];
+  // 最近一次校验通过的时间，0 表示未校验。
+  int64 verified_at = 6 [(api.go_tag)='json:"verified_at"'];
+  int64 created_at = 7 [(api.go_tag)='json:"created_at"'];
+  int64 updated_at = 8 [(api.go_tag)='json:"updated_at"'];
+  // 发送顺序：1 = 默认（主）供应商，2.. = 次供应商（按序故障转移），0 = 已配置但不参与发送。
+  int32 priority = 9 [(api.go_tag)='json:"priority"'];
+}
+
+message ListProviderCatalogRequest {
+  // 可选，按通道过滤：email / sms。
+  string channel = 1 [(api.query) = "channel"];
+}
+
+message ListProviderCatalogResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  repeated ProviderDescriptor providers = 3 [(api.go_tag)='json:"providers"'];
+}
+
+message ListProviderConfigsRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string channel = 2 [(api.query) = "channel"];
+}
+
+message ListProviderConfigsResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  repeated ProviderConfig configs = 3 [(api.go_tag)='json:"configs"'];
+  int64 total = 4 [(api.go_tag)='json:"total"'];
+}
+
+// 校验并保存：服务端用 settings 构造发送器并真实发送一封测试邮件；
+// 成功才加密落库。该通道尚无默认供应商时自动成为默认，否则追加为最后一个次供应商。
+// 失败不写任何数据。
+message SetProviderConfigRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string channel = 2 [(api.path) = "channel", (api.vd) = "$!=''"];
+  string provider = 3 [(api.path) = "provider", (api.vd) = "$!=''"];
+  // 供应商私有配置；secret 字段留空表示沿用已存值。
+  map<string, string> settings = 4;
+  // 测试消息接收地址；为空时使用当前管理员邮箱。
+  string test_recipient = 5;
+}
+
+message SetProviderConfigResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  ProviderConfig config = 3 [(api.go_tag)='json:"config"'];
+}
+
+// 设置某通道的发送顺序：primary 为默认供应商，fallbacks 为按序的次供应商；
+// 未列出的已保存供应商保持配置但不参与发送（priority=0）。
+// primary 为空且 fallbacks 为空表示该通道不使用任何自定义供应商，回退平台默认。
+message SetProviderPriorityRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string channel = 2 [(api.path) = "channel", (api.vd) = "$!=''"];
+  string primary = 3;
+  repeated string fallbacks = 4;
+}
+
+message SetProviderPriorityResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  repeated ProviderConfig configs = 3 [(api.go_tag)='json:"configs"'];
+}
+
+message DeleteProviderConfigRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string channel = 2 [(api.path) = "channel", (api.vd) = "$!=''"];
+  string provider = 3 [(api.path) = "provider", (api.vd) = "$!=''"];
+}
+
+message DeleteProviderConfigResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+}
+
+// 消息供应商配置管理（平台管理员，Organization 维度）
+service MessageProviderAdminHandler {
+  // 供应商目录（库），前端按 fields 渲染表单。
+  rpc ListProviderCatalog(ListProviderCatalogRequest) returns(ListProviderCatalogResponse) {
+    option (api.get) = "/api/v1/admin/message-providers";
+  }
+
+  rpc ListProviderConfigs(ListProviderConfigsRequest) returns(ListProviderConfigsResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/message-providers";
+  }
+
+  // 校验通过才保存并启用。
+  rpc SetProviderConfig(SetProviderConfigRequest) returns(SetProviderConfigResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/message-providers/:channel/:provider";
+  }
+
+  // 设置默认 / 次供应商顺序。
+  rpc SetProviderPriority(SetProviderPriorityRequest) returns(SetProviderPriorityResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/message-providers/:channel/priority";
+  }
+
+  rpc DeleteProviderConfig(DeleteProviderConfigRequest) returns(DeleteProviderConfigResponse) {
+    option (api.delete) = "/api/v1/admin/organizations/:organization_id/message-providers/:channel/:provider";
+  }
+}

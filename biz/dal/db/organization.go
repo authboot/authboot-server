@@ -17,6 +17,7 @@
 package db
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -33,13 +34,13 @@ type Organization struct {
 	Code string `json:"code" gorm:"type:varchar(64);not null;uniqueIndex"`
 	Logo string `json:"logo" gorm:"type:varchar(512)"`
 	// PreviousLogo 记录最近一次被替换掉的旧 logo（"bucket/key" 相对路径），仅保留最新一条
-	PreviousLogo string    `json:"previous_logo" gorm:"type:varchar(512)"`
+	PreviousLogo string `json:"previous_logo" gorm:"type:varchar(512)"`
 	// Settings 组织级配置（admin token 时长、用户登录方式等），JSON 存储，见
-	// OrganizationSettings；空串表示全部使用默认值
-	Settings     string    `json:"settings" gorm:"type:json"`
-	Status       int8      `json:"status" gorm:"type:tinyint;not null;default:1;index"`
-	CreatedAt   time.Time `json:"created_at" gorm:"not null"`
-	UpdatedAt   time.Time `json:"updated_at" gorm:"not null"`
+	// OrganizationSettings；空配置写入 {}，表示全部使用默认值。
+	Settings  string    `json:"settings" gorm:"type:json"`
+	Status    int8      `json:"status" gorm:"type:tinyint;not null;default:1;index"`
+	CreatedAt time.Time `json:"created_at" gorm:"not null"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"not null"`
 }
 
 // TableName set table name to make gorm can correctly identify
@@ -74,6 +75,10 @@ func (d *OrganizationDAO) CreateOrganization(org *Organization) (int64, error) {
 	}
 	if org.Status == 0 {
 		org.Status = constants.StatusEnabled
+	}
+	// MySQL JSON 列不接受空字符串，未配置时保存为空对象。
+	if strings.TrimSpace(org.Settings) == "" {
+		org.Settings = "{}"
 	}
 	if err := d.db.Create(org).Error; err != nil {
 		return 0, err
@@ -128,5 +133,9 @@ func (d *OrganizationDAO) UpdateOrganization(org *Organization) error {
 // UpdateOrganizationSettings persists the org's settings JSON blob only,
 // leaving the other organization fields untouched.
 func (d *OrganizationDAO) UpdateOrganizationSettings(id int64, settingsJSON string) error {
+	// 清空配置表示恢复默认值，仍需写入合法 JSON。
+	if strings.TrimSpace(settingsJSON) == "" {
+		settingsJSON = "{}"
+	}
 	return d.db.Model(&Organization{}).Where("id = ?", id).Update("settings", settingsJSON).Error
 }

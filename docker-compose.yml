@@ -8,7 +8,7 @@
 # 需要 8681 / 6379 / 8998 / 8999 / 8888 空闲；宿主机原有的
 # mysql / redis / aistor-server 容器已移除，避免端口和重名冲突。
 #
-# 数据卷由 compose 管理（实际名称带项目前缀，如 auth-server_mysql_data）：
+# 数据卷由 compose 管理（实际名称带项目前缀，如 authboot-server_mysql_data）：
 # 空卷首次启动时自动导入 pkg/configs/sql/init.sql（表结构 + 导出时的数据），
 # 之后重建容器不会重复导入。
 services:
@@ -68,8 +68,8 @@ services:
       - "8999:9001" # 控制台
     volumes:
       - minio_data:/data
-      # license 路径可用 MINIO_LICENSE_FILE 覆盖，默认沿用宿主机已有部署
-      - "${MINIO_LICENSE_FILE:-/media/ssd1/v_chenpeng20/minio/minio.license}:/minio.license:ro"
+      # license 路径可用 MINIO_LICENSE_FILE 覆盖，默认取项目同级目录下的 minio/minio.license
+      - "${MINIO_LICENSE_FILE:-../minio/minio.license}:/minio.license:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
@@ -92,7 +92,7 @@ services:
     # 因此应用必须使用 host 网络，才能同时访问 mysql / redis / minio。
     network_mode: host
     volumes:
-      # 日志写入 ./hlog/logs/app.log，按大小切割，历史文件名带切割时间；挂载出来便于查看与保留
+      # 日志按 ./hlog/logs/<date>.log 落盘，挂载出来便于查看与保留
       - ./hlog:/app/hlog
       # 运行期要读 pkg/configs/casbin/model.conf（镜像内未打包，直接从源码目录挂载）
       - ./pkg/configs:/app/pkg/configs:ro

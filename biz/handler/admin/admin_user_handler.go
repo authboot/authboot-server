@@ -60,6 +60,31 @@ func UpdateMyProfile(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, resp)
 }
 
+// UploadMyAvatar accepts multipart/form-data with an avatar image for the
+// signed-in admin.
+// @router /api/v1/admin/me/avatar [POST]
+func UploadMyAvatar(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req admin.GetMyProfileRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := service.NewAdminUserService(ctx, c).UploadMyAvatar(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, admin.UpdateMyProfileResponse{
+			Code:    base.StatusCode,
+			Message: base.StatusMsg,
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
 // GetMySettings .
 // @router /api/v1/admin/me/settings [GET]
 func GetMySettings(ctx context.Context, c *app.RequestContext) {

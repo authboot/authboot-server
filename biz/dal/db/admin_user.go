@@ -89,6 +89,12 @@ func UpdateAdminUserProfile(u *AdminUser) error {
 		}).Error
 }
 
+// UpdateAdminUserAvatar changes only an admin's avatar reference.
+func UpdateAdminUserAvatar(id int64, avatar string) error {
+	return DB.Model(&AdminUser{}).Where("id = ?", id).
+		Update("avatar", avatar).Error
+}
+
 // UpdateAdminUserSettings replaces an admin's settings JSON.
 func UpdateAdminUserSettings(id int64, settings datatypes.JSON) error {
 	return DB.Model(&AdminUser{}).Where("id = ?", id).

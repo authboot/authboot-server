@@ -35,6 +35,7 @@ var (
 	IUserIdentityDAO           *UserIdentityDAO
 	IOrganizationDAO           *OrganizationDAO
 	IOAuthConfigDAO            *OAuthConfigDAO
+	IMessageProviderConfigDAO  *MessageProviderConfigDAO
 	INotificationDAO           *NotificationDAO
 	IOrganizationInvitationDAO *OrganizationInvitationDAO
 	IOrganizationMembershipDAO *OrganizationMembershipDAO
@@ -62,6 +63,7 @@ func Init() {
 	IUserIdentityDAO = NewUserIdentityDAO(DB)
 	IOrganizationDAO = NewOrganizationDAO(DB)
 	IOAuthConfigDAO = NewOAuthConfigDAO(DB)
+	IMessageProviderConfigDAO = NewMessageProviderConfigDAO(DB)
 	INotificationDAO = NewNotificationDAO(DB)
 	IOrganizationInvitationDAO = NewOrganizationInvitationDAO(DB)
 	IOrganizationMembershipDAO = NewOrganizationMembershipDAO(DB)
@@ -75,6 +77,7 @@ func Init() {
 		&User{},
 		&UserIdentity{},
 		&OAuthConfig{},
+		&MessageProviderConfig{},
 		&AdminAuditLog{},
 		&UserAddress{},
 		&UserLoginLog{},

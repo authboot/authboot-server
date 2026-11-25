@@ -112,6 +112,30 @@ CREATE TABLE `tb_oauth_configs` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------
+-- 1.5.1 消息供应商配置（每组织 × 通道 × 供应商一行，config 为 AES-GCM 加密 JSON）
+--   供应商目录（resend / smtp）由后端注册表提供，不入库；本表只存组织级凭证。
+--   priority：1 主供应商，2.. 次供应商（按序故障转移），0 已配置但不参与发送。
+--   不预置种子数据：凭证须经管理端 PUT 接口校验后写入（用 EMAIL_CONFIG_KEY 加密）。
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS `tb_message_provider_configs`;
+CREATE TABLE `tb_message_provider_configs` (
+  `id`              bigint        NOT NULL AUTO_INCREMENT,
+  `organization_id` bigint        NOT NULL,
+  `channel`         varchar(16)   NOT NULL,
+  `provider`        varchar(32)   NOT NULL,
+  `config`          varbinary(4096) NOT NULL,
+  `enabled`         tinyint       NOT NULL DEFAULT '1',
+  `priority`        int           NOT NULL DEFAULT '0',
+  `verified_at`     bigint        NOT NULL DEFAULT '0',
+  `created_at`      datetime(3)   NOT NULL,
+  `updated_at`      datetime(3)   NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_org_channel_provider` (`organization_id`, `channel`, `provider`),
+  KEY `idx_tb_message_provider_configs_enabled` (`enabled`),
+  KEY `idx_tb_message_provider_configs_priority` (`priority`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------
 -- 1.6 应用客户端（登录入口：ios / android / h5 / mini_program）
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS `tb_app_clients`;

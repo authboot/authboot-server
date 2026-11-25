@@ -23,6 +23,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"gorm.io/datatypes"
@@ -32,6 +33,7 @@ import (
 	"github.com/authboot/authboot-server/biz/model/common"
 	"github.com/authboot/authboot-server/biz/mw/jwt"
 	"github.com/authboot/authboot-server/pkg/errno"
+	"github.com/authboot/authboot-server/pkg/utils"
 )
 
 // AdminUserService serves the current admin's profile and settings.
@@ -80,6 +82,31 @@ func (s *AdminUserService) UpdateMyProfile(req *adminmodel.UpdateMyProfileReques
 	if err := db.UpdateAdminUserProfile(u); err != nil {
 		return nil, err
 	}
+	return &adminmodel.UpdateMyProfileResponse{
+		Code:    errno.SuccessCode,
+		Message: errno.SuccessMsg,
+		Profile: toAdminAccount(u),
+	}, nil
+}
+
+// UploadMyAvatar stores the multipart "avatar" image of the current request as
+// the signed-in admin's avatar. The account comes from the admin token, so an
+// admin can only ever replace their own avatar.
+func (s *AdminUserService) UploadMyAvatar(_ *adminmodel.GetMyProfileRequest) (*adminmodel.UpdateMyProfileResponse, error) {
+	u, err := s.currentAdmin()
+	if err != nil {
+		return nil, err
+	}
+	ref, remove, err := utils.StoreAvatarUpload(s.ctx, s.c, fmt.Sprintf("admin-avatar-%d", u.ID))
+	if err != nil {
+		return nil, err
+	}
+	if err := db.UpdateAdminUserAvatar(u.ID, ref); err != nil {
+		// Only remove this newly uploaded object; existing avatars may still be referenced.
+		remove()
+		return nil, err
+	}
+	u.Avatar = ref
 	return &adminmodel.UpdateMyProfileResponse{
 		Code:    errno.SuccessCode,
 		Message: errno.SuccessMsg,
@@ -159,7 +186,8 @@ func decodeSettings(raw datatypes.JSON) (map[string]string, error) {
 }
 
 // toAdminAccount maps a db platform account to the API view. A zero status
-// (legacy row) is reported as ENABLED.
+// (legacy row) is reported as ENABLED, and a stored avatar reference is
+// returned as its public URL.
 func toAdminAccount(u *db.AdminUser) *adminmodel.AdminAccount {
 	status := common.Status(u.Status)
 	if status == common.Status_STATUS_UNKNOWN {
@@ -176,7 +204,7 @@ func toAdminAccount(u *db.AdminUser) *adminmodel.AdminAccount {
 		Id:              u.ID,
 		Email:           u.Email,
 		Nickname:        u.UserName,
-		Avatar:          u.Avatar,
+		Avatar:          utils.AvatarURL(u.Avatar),
 		BackgroundImage: u.BackgroundImage,
 		Signature:       u.Signature,
 		Status:          status,

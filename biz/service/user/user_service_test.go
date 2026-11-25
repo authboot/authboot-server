@@ -1,13 +1,8 @@
 package user
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"image"
-	"image/gif"
-	"image/jpeg"
-	"image/png"
 	"testing"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
@@ -19,48 +14,6 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestValidateAvatar(t *testing.T) {
-	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	for _, format := range []string{"png", "jpeg", "gif"} {
-		t.Run(format, func(t *testing.T) {
-			var b bytes.Buffer
-			var err error
-			switch format {
-			case "png":
-				err = png.Encode(&b, img)
-			case "jpeg":
-				err = jpeg.Encode(&b, img, nil)
-			case "gif":
-				err = gif.Encode(&b, img, nil)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := validateAvatar(b.Bytes())
-			if err != nil || got != format {
-				t.Fatalf("format=%q err=%v", got, err)
-			}
-			if _, err := validateAvatar(b.Bytes()[:b.Len()/2]); err == nil {
-				t.Fatal("accepted truncated image")
-			}
-		})
-	}
-	var large bytes.Buffer
-	if err := png.Encode(&large, image.NewGray(image.Rect(0, 0, 4001, 4000))); err != nil {
-		t.Fatal(err)
-	}
-	for name, data := range map[string][]byte{
-		"empty": nil, "svg": []byte(`<svg onload="alert(1)"/>`),
-		"oversized": make([]byte, maxAvatarBytes+1), "pixels": large.Bytes(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := validateAvatar(data); !errors.Is(err, errno.ParamErr) {
-				t.Fatalf("expected parameter error, got %v", err)
-			}
-		})
-	}
-}
-
 func TestUploadAvatarRequiresAuthenticatedOrganization(t *testing.T) {
 	c := app.NewContext(0)
 	s := &UserService{ctx: context.Background(), c: c}
@@ -68,6 +21,17 @@ func TestUploadAvatarRequiresAuthenticatedOrganization(t *testing.T) {
 		c.Set(jwt.CtxKeyUserID, userID)
 		if _, err := s.UploadMyAvatar(&model.UploadMyAvatarRequest{}); !errors.Is(err, errno.AuthorizationFailedErr) {
 			t.Fatalf("expected authentication failure before accessing storage, got %v", err)
+		}
+	}
+}
+
+func TestUploadUserAvatarRequiresOrganizationAndUser(t *testing.T) {
+	s := &UserService{ctx: context.Background(), c: app.NewContext(0)}
+	for _, req := range []*model.GetUserRequest{
+		{}, {OrganizationId: 1}, {UserId: 1},
+	} {
+		if _, err := s.UploadUserAvatar(req); !errors.Is(err, errno.ParamErr) {
+			t.Fatalf("expected parameter error before any lookup, got %v", err)
 		}
 	}
 }

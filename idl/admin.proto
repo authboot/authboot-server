@@ -87,6 +87,13 @@ service AdminUserHandler {
     option (api.put) = "/api/v1/admin/me";
   }
 
+  // 上传 / 更改自己的头像。图片通过 multipart/form-data 上传，表单字段名为
+  // avatar，由 handler 通过 c.FormFile("avatar") 读取；请求不携带其他参数，
+  // 响应返回更新后的资料，因此复用 GetMyProfileRequest / UpdateMyProfileResponse。
+  rpc UploadMyAvatar(GetMyProfileRequest) returns(UpdateMyProfileResponse) {
+    option (api.post) = "/api/v1/admin/me/avatar";
+  }
+
   rpc GetMySettings(GetMySettingsRequest) returns(GetMySettingsResponse) {
     option (api.get) = "/api/v1/admin/me/settings";
   }

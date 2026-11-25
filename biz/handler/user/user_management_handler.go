@@ -111,6 +111,31 @@ func UpdateUser(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, resp)
 }
 
+// UploadUserAvatar accepts multipart/form-data with an avatar image for a user
+// in the organization (an admin acting on the user's behalf).
+// @router /api/v1/admin/organizations/:organization_id/users/:user_id/avatar [POST]
+func UploadUserAvatar(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req user.GetUserRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := service.NewUserService(ctx, c).UploadUserAvatar(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, user.UpdateUserResponse{
+			Code:    base.StatusCode,
+			Message: base.StatusMsg,
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}
+
 // DisableUser .
 // @router /api/v1/admin/organizations/:organization_id/users/:user_id/disable [POST]
 func DisableUser(ctx context.Context, c *app.RequestContext) {

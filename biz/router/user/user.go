@@ -31,6 +31,7 @@ func Register(r *server.Hertz) {
 						_users := _organization_id.Group("/users", _usersMw()...)
 						_users.PUT("/:user_id", append(_updateuserMw(), user.UpdateUser)...)
 						_user_id := _users.Group("/:user_id", _user_idMw()...)
+						_user_id.POST("/avatar", append(_uploaduseravatarMw(), user.UploadUserAvatar)...)
 						_user_id.POST("/disable", append(_disableuserMw(), user.DisableUser)...)
 						_user_id.POST("/enable", append(_enableuserMw(), user.EnableUser)...)
 						{

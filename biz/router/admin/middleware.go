@@ -46,6 +46,12 @@ func _meMw() []app.HandlerFunc {
 	return nil
 }
 
+func _uploadmyavatarMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		audit.Middleware(),
+	}
+}
+
 func _getmysettingsMw() []app.HandlerFunc {
 	// your code...
 	return nil

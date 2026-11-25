@@ -101,7 +101,7 @@ func (s *InviteService) InviteAdmin(req *invitation.InviteAdminRequest) (*invita
 func (s *InviteService) notifyInvitee(inv *db.OrganizationInvitation) {
 	if body, err := buildInviteEmailHTML(inv); err != nil {
 		hlog.CtxErrorf(s.ctx, "render invite email for %s failed: %v", inv.Email, err)
-	} else if err := email.Send(s.ctx, &email.Message{
+	} else if err := email.SendFor(s.ctx, inv.OrganizationID, &email.Message{
 		To:      []string{inv.Email},
 		Subject: "You have been invited to join an organization",
 		HTML:    body,

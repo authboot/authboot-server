@@ -170,30 +170,40 @@ func TestOrganizationAndRoleBoundaries(t *testing.T) {
 	}{
 		{owner, "/api/v1/admin/organizations/1", 200},
 		{owner, "/api/v1/admin/organizations/2", 403},
-		{member, "/api/v1/admin/organizations/1/users", 403},
+		{member, "/api/v1/admin/organizations/1/users", 200},
+		{member, "/api/v1/admin/organizations/2", 403},
 		{admin, "/api/v1/admin/organizations/1", 200},
+		{admin, "/api/v1/admin/organizations/2", 403},
 	} {
 		if status, _ := request(t, h, "GET", tc.path, tc.token, nil); status != tc.status {
 			t.Fatalf("%s: %d", tc.path, status)
 		}
 	}
 	path := "/api/v1/admin/organizations/1/members/3/role"
+	for _, permission := range []string{"organization:manage", "member:manage", "resource:write"} {
+		if err := db.AuthorizeOrganization(3, 1, permission); err != nil {
+			t.Fatalf("backend member lacks %s: %v", permission, err)
+		}
+	}
 	if status, _ := request(t, h, "PUT", path, admin, map[string]string{"role": "owner"}); status != 403 {
-		t.Fatal("admin escalated", status)
+		t.Fatal("role change without step-up grant", status)
 	}
 	if status, _ := request(t, h, "PUT", "/api/v1/admin/organizations/1/members/4/role", owner, map[string]string{"role": "admin"}); status != 403 {
 		t.Fatal("cross-org grant", status)
 	}
-	claims, err := jwt.ParseAdminToken(owner)
+	if err := db.AuthorizeOrganization(2, 1, "organization:manage"); err != nil {
+		t.Fatal("workspace admin cannot manage settings", err)
+	}
+	claims, err := jwt.ParseAdminToken(admin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, err := db.NewSecurityGrant(db.DB, db.SecurityGrant{Subject: "admin", AccountID: 1, OrganizationID: 1, SessionID: claims.SessionID, Scope: "member:manage"}, time.Now(), time.Minute)
+	grant, err := db.NewSecurityGrant(db.DB, db.SecurityGrant{Subject: "admin", AccountID: 2, OrganizationID: 1, SessionID: claims.SessionID, Scope: "member:manage"}, time.Now(), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := request(t, h, "PUT", path, owner, map[string]string{"role": "admin"}, grant); status != 200 {
-		t.Fatal("owner grant", status)
+	if status, _ := request(t, h, "PUT", path, admin, map[string]string{"role": "admin"}, grant); status != 200 {
+		t.Fatal("workspace admin role grant", status)
 	}
 	if status, _ := request(t, h, "GET", "/api/v1/admin/organizations/1", member, nil); status != 200 {
 		t.Fatal("grant not effective", status)

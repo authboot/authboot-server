@@ -48,7 +48,7 @@ func authorizeAdminResource(c *app.RequestContext, accountID, tokenOrg int64) bo
 		if strings.Contains(path, "/members") || strings.Contains(path, "/invitations") || strings.Contains(path, "/roles") {
 			permission = "member:manage"
 		}
-		// Organization settings and lifecycle are owner-only.
+		// Organization settings and lifecycle require workspace management permission.
 		tail := strings.SplitN(path, "/organizations/"+raw, 2)
 		if write && len(tail) == 2 && (tail[1] == "" || tail[1] == "/settings" || tail[1] == "/logo") {
 			permission = "organization:manage"
@@ -122,13 +122,16 @@ func authorizeAdminResource(c *app.RequestContext, accountID, tokenOrg int64) bo
 		return true // NotificationDAO always scopes reads/writes to current_user_id.
 	}
 	switch string(c.Path()) {
-	case "/api/v1/admin/me", "/api/v1/admin/me/settings",
+	case "/api/v1/admin/me", "/api/v1/admin/me/settings", "/api/v1/admin/me/avatar",
 		"/api/v1/admin/auth/step-up",
 		"/api/v1/admin/auth/mfa/setup", "/api/v1/admin/auth/mfa/confirm",
 		"/api/v1/admin/auth/mfa/disable", "/api/v1/admin/auth/mfa/recovery",
 		"/api/v1/admin/auth/logout", "/api/v1/admin/auth/switch-organization",
 		"/api/v1/admin/organizations", "/api/v1/invitations/accept":
 		return true
+	case "/api/v1/admin/message-providers":
+		// Read-only catalog from the backend registry; carries no tenant data.
+		return !write
 	default:
 		return false
 	}

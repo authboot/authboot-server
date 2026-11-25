@@ -146,6 +146,15 @@ service UserManagementHandler {
   rpc EnableUser(EnableUserRequest) returns(EnableUserResponse) {
     option (api.post) = "/api/v1/admin/organizations/:organization_id/users/:user_id/enable";
   }
+
+  // Admin uploads an avatar on behalf of a user in the organization. The image
+  // is sent as multipart/form-data in the "avatar" field (read by the handler
+  // via c.FormFile("avatar")). The request only carries the path selectors and
+  // the response returns the updated user, so the existing GetUserRequest /
+  // UpdateUserResponse messages are reused.
+  rpc UploadUserAvatar(GetUserRequest) returns(UpdateUserResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/users/:user_id/avatar";
+  }
 }
 
 // --- self-service (end user operating on their own account) -----------------
