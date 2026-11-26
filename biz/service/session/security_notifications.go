@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/authboot/authboot-server/pkg/securitymetrics"
@@ -66,7 +65,16 @@ func retrySecurityNotifications(ctx context.Context, org, user int64, send func(
 				// Bound from claim time, so slow DB lookups cannot move sending
 				// beyond the lease and overlap a subsequent attempt.
 				sendCtx, cancel := context.WithDeadline(ctx, claimTime.Add(securityNotificationTimeout))
-				err = send(sendCtx, &email.Message{To: []string{address}, Subject: "账户登录安全提醒", Text: fmt.Sprintf("您的账户出现登录安全事件（%s）。时间：%s；IP：%s；近似地区：%s。请登录 App 安全中心查看并确认是否本人；如非本人，请撤销会话并修改密码。本提醒为登录后风险提示，不代表已阻止登录。", e.Kind, time.Unix(e.CreatedAt, 0).UTC().Format(time.RFC3339), e.IP, e.Location.Display)})
+				var subject, html string
+				subject, html, err = email.RenderFor(sendCtx, org, "security_alert", map[string]any{
+					"Kind":     e.Kind,
+					"Time":     time.Unix(e.CreatedAt, 0).UTC().Format(time.RFC3339),
+					"IP":       e.IP,
+					"Location": e.Location.Display,
+				})
+				if err == nil {
+					err = send(sendCtx, &email.Message{To: []string{address}, Subject: subject, HTML: html})
+				}
 				cancel()
 				if err == nil {
 					status = "sent"

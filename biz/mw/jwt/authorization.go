@@ -123,14 +123,15 @@ func authorizeAdminResource(c *app.RequestContext, accountID, tokenOrg int64) bo
 	}
 	switch string(c.Path()) {
 	case "/api/v1/admin/me", "/api/v1/admin/me/settings", "/api/v1/admin/me/avatar",
+		"/api/v1/admin/me/login-logs",
 		"/api/v1/admin/auth/step-up",
 		"/api/v1/admin/auth/mfa/setup", "/api/v1/admin/auth/mfa/confirm",
 		"/api/v1/admin/auth/mfa/disable", "/api/v1/admin/auth/mfa/recovery",
 		"/api/v1/admin/auth/logout", "/api/v1/admin/auth/switch-organization",
 		"/api/v1/admin/organizations", "/api/v1/invitations/accept":
 		return true
-	case "/api/v1/admin/message-providers":
-		// Read-only catalog from the backend registry; carries no tenant data.
+	case "/api/v1/admin/message-providers", "/api/v1/admin/email-templates":
+		// Read-only catalogs from the backend registry; carry no tenant data.
 		return !write
 	default:
 		return false

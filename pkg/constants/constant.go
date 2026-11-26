@@ -115,6 +115,7 @@ const (
 	OrganizationInvitationTableName = "tb_organization_invitations"
 	OAuthConfigTableName            = "tb_oauth_configs"
 	MessageProviderConfigTableName  = "tb_message_provider_configs"
+	EmailTemplateTableName          = "tb_email_templates"
 	AdminAuditLogTableName          = "tb_admin_audit_logs"
 	UserAddressTableName            = "tb_user_addresses"
 	UserLoginLogTableName           = "tb_user_login_logs"

@@ -62,3 +62,8 @@ func _updatemysettingsMw() []app.HandlerFunc {
 		audit.Middleware(),
 	}
 }
+
+func _listmyloginlogsMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

@@ -106,8 +106,21 @@ func (d *OrganizationInvitationDAO) QueryInvitationByToken(token string) (*Organ
 // ListInvitationsByOrg returns a page of an organization's invitations
 // (newest first) plus the total count.
 func (d *OrganizationInvitationDAO) ListInvitationsByOrg(organizationID int64, page, pageSize int) ([]*OrganizationInvitation, int64, error) {
+	return d.ListInvitationsByOrgFiltered(organizationID, "", 0, page, pageSize)
+}
+
+// ListInvitationsByOrgFiltered pages an organization's invitations, newest
+// first, optionally matching the email (LIKE) and a status (0 = all).
+func (d *OrganizationInvitationDAO) ListInvitationsByOrgFiltered(organizationID int64, search string, status int, page, pageSize int) ([]*OrganizationInvitation, int64, error) {
 	base := func() *gorm.DB {
-		return d.db.Model(&OrganizationInvitation{}).Where("organization_id = ?", organizationID)
+		q := d.db.Model(&OrganizationInvitation{}).Where("organization_id = ?", organizationID)
+		if search != "" {
+			q = q.Where("email LIKE ?", "%"+search+"%")
+		}
+		if status != 0 {
+			q = q.Where("status = ?", status)
+		}
+		return q
 	}
 
 	var total int64
@@ -135,6 +148,13 @@ func (d *OrganizationInvitationDAO) ListInvitationsByOrg(organizationID int64, p
 func (d *OrganizationInvitationDAO) UpdateInvitationStatus(id int64, status int, updatedAt int64) error {
 	return d.db.Model(&OrganizationInvitation{}).Where("id = ?", id).
 		Updates(map[string]interface{}{"status": status, "updated_at": updatedAt}).Error
+}
+
+// RenewInvitation replaces the token and expiry of a pending invitation so it
+// can be re-sent without creating a second row for the same email.
+func (d *OrganizationInvitationDAO) RenewInvitation(id int64, token string, expiredAt, updatedAt int64) error {
+	return d.db.Model(&OrganizationInvitation{}).Where("id = ? AND status = ?", id, InvitationStatusPending).
+		Updates(map[string]interface{}{"token": token, "expired_at": expiredAt, "updated_at": updatedAt}).Error
 }
 
 // AcceptInvitationRecord marks an invitation accepted by an account.

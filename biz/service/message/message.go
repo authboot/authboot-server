@@ -133,13 +133,24 @@ func (s *MessageService) SendCode(req *message.SendCodeRequest) (*message.SendCo
 		return nil, err
 	}
 
-	body := fmt.Sprintf("你的验证码是 %s，%d 分钟内有效。", code, int(codeTTL/time.Minute))
 	switch req.Channel {
 	case message.MessageChannel_MESSAGE_CHANNEL_EMAIL:
+		// No organization is known at this point, so the built-in template is
+		// used; pass the real org id here once SendCode carries one.
+		subject, html, err := email.RenderFor(s.ctx, 0, "verification_code", map[string]any{
+			"Code":          code,
+			"ExpireMinutes": int(codeTTL / time.Minute),
+		})
+		if err != nil {
+			codeStore.Discard(scene, req.Target, code)
+			return nil, err
+		}
+		// Plain-text alternative keeps the code readable in text-only clients.
 		if err := s.sendEmail(s.ctx, &email.Message{
 			To:      []string{req.Target},
-			Subject: "你的验证码",
-			Text:    body,
+			Subject: subject,
+			HTML:    html,
+			Text:    fmt.Sprintf("你的验证码是 %s，%d 分钟内有效。", code, int(codeTTL/time.Minute)),
 		}); err != nil {
 			codeStore.Discard(scene, req.Target, code)
 			return nil, err
@@ -148,7 +159,7 @@ func (s *MessageService) SendCode(req *message.SendCodeRequest) (*message.SendCo
 		if err := sms.Send(s.ctx, &sms.Message{
 			PhoneNumbers:  []string{req.Target},
 			TemplateParam: map[string]string{"code": code},
-			Content:       body,
+			Content:       fmt.Sprintf("你的验证码是 %s，%d 分钟内有效。", code, int(codeTTL/time.Minute)),
 		}); err != nil {
 			codeStore.Discard(scene, req.Target, code)
 			return nil, err

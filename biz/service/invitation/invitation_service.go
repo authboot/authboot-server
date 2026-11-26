@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -99,11 +100,11 @@ func (s *InviteService) InviteAdmin(req *invitation.InviteAdminRequest) (*invita
 // notifyInvitee sends the invitation email and, when the invitee already has an
 // account, an in-app notification. Both are best-effort.
 func (s *InviteService) notifyInvitee(inv *db.OrganizationInvitation) {
-	if body, err := buildInviteEmailHTML(inv); err != nil {
+	if subject, body, err := buildInviteEmail(s.ctx, inv); err != nil {
 		hlog.CtxErrorf(s.ctx, "render invite email for %s failed: %v", inv.Email, err)
 	} else if err := email.SendFor(s.ctx, inv.OrganizationID, &email.Message{
 		To:      []string{inv.Email},
-		Subject: "You have been invited to join an organization",
+		Subject: subject,
 		HTML:    body,
 	}); err != nil {
 		hlog.CtxErrorf(s.ctx, "invite email to %s failed: %v", inv.Email, err)
@@ -131,10 +132,11 @@ func (s *InviteService) notifyInvitee(inv *db.OrganizationInvitation) {
 	_ = notifCache.SetLatest(user.ID, n.ID)
 }
 
-// buildInviteEmailHTML renders the invitation email body from the template in
-// biz/mw/email/templates, carrying the token and expiry.
-func buildInviteEmailHTML(inv *db.OrganizationInvitation) (string, error) {
-	return email.Render("invitation.html", map[string]any{
+// buildInviteEmail renders the invitation subject and body with the
+// organization's template (or the built-in default), carrying the token and
+// expiry.
+func buildInviteEmail(ctx context.Context, inv *db.OrganizationInvitation) (subject, body string, err error) {
+	return email.RenderFor(ctx, inv.OrganizationID, "invitation", map[string]any{
 		"Token":    inv.Token,
 		"ExpireAt": time.Unix(inv.ExpiredAt, 0).Format("2006-01-02 15:04:05"),
 	})
@@ -151,7 +153,8 @@ func (s *InviteService) GetInvitation(req *invitation.GetInvitationRequest) (*in
 
 // ListInvitations returns a page of an organization's invitations plus the total.
 func (s *InviteService) ListInvitations(req *invitation.ListInvitationsRequest) ([]*invitation.OrganizationInvitation, int64, error) {
-	list, total, err := s.organizationInvitationDAO.ListInvitationsByOrg(req.OrganizationId, int(req.Page), int(req.PageSize))
+	list, total, err := s.organizationInvitationDAO.ListInvitationsByOrgFiltered(
+		req.OrganizationId, strings.TrimSpace(req.Search), int(req.Status), int(req.Page), int(req.PageSize))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -205,6 +208,31 @@ func (s *InviteService) RevokeInvitation(req *invitation.RevokeInvitationRequest
 		return errno.InvitationInvalidErr
 	}
 	return s.organizationInvitationDAO.UpdateInvitationStatus(inv.ID, db.InvitationStatusRevoked, time.Now().Unix())
+}
+
+// ResendInvitation rotates the token, extends the expiry and sends the email
+// again. Only pending invitations can be re-sent.
+func (s *InviteService) ResendInvitation(req *invitation.ResendInvitationRequest) (*invitation.OrganizationInvitation, error) {
+	inv, err := s.organizationInvitationDAO.QueryInvitationByID(req.InvitationId)
+	if err != nil {
+		return nil, err
+	}
+	if inv.Status != db.InvitationStatusPending {
+		return nil, errno.InvitationInvalidErr
+	}
+	token, err := newInvitationToken()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	if err := s.organizationInvitationDAO.RenewInvitation(inv.ID, token, now+constants.InvitationTTL, now); err != nil {
+		return nil, err
+	}
+	inv.Token = token
+	inv.ExpiredAt = now + constants.InvitationTTL
+	inv.UpdatedAt = now
+	s.notifyInvitee(inv)
+	return toInvitationInfo(inv), nil
 }
 
 // newInvitationToken returns a random 32-byte hex token.

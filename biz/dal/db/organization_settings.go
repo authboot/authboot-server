@@ -18,6 +18,9 @@ package db
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/authboot/authboot-server/pkg/constants"
 )
@@ -34,6 +37,25 @@ type OrganizationSettings struct {
 	AdminTokenTTLSeconds int64 `json:"admin_token_ttl_seconds"`
 	// LoginMethods 组织下普通用户的授权登录方式开关
 	LoginMethods *LoginMethods `json:"login_methods"`
+	// Maintenance 维护模式；nil 表示未开启且没有保存过公告
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// PasswordPolicy 普通用户密码策略；nil 表示默认（仅长度 8–72）
+	PasswordPolicy *PasswordPolicy `json:"password_policy,omitempty"`
+}
+
+// Maintenance 维护模式：Enabled 为 true 时组织下普通用户的登录 / 注册 / 找回密码
+// 被拒绝并返回公告标题。公告可以在未开启时预先保存。
+type Maintenance struct {
+	Enabled     bool   `json:"enabled"`
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	ExpectedEnd int64  `json:"expected_end"` // unix 秒，0 表示未设置
+	StartedAt   int64  `json:"started_at"`   // unix 秒，开启时写入，关闭时清零
+}
+
+// MaintenanceActive 报告组织是否处于维护模式。
+func (s *OrganizationSettings) MaintenanceActive() bool {
+	return s != nil && s.Maintenance != nil && s.Maintenance.Enabled
 }
 
 // LoginMethods 定义组织下普通用户（非 admin）可用的登录方式。字段名即开关：
@@ -82,6 +104,9 @@ func parseOrganizationSettings(raw string) *OrganizationSettings {
 	} else if s.LoginMethods.OAuthProviders == nil {
 		s.LoginMethods.OAuthProviders = append([]string(nil), constants.OAuthProviders...)
 	}
+	if s.PasswordPolicy != nil {
+		s.PasswordPolicy.Normalize()
+	}
 	return &s
 }
 
@@ -117,4 +142,119 @@ func AdminAccessTokenTTL(orgID int64) int64 {
 		return constants.AppAccessTokenTTLSeconds
 	}
 	return s.AdminTokenTTLSeconds
+}
+
+// ---------------------------------------------------------------------------
+// Password policy
+// ---------------------------------------------------------------------------
+
+// Password length bounds. The upper bound is bcrypt's 72-byte input limit and
+// is not configurable; the lower bound is the floor an admin may set.
+const (
+	PasswordMinLengthFloor = 8
+	PasswordMaxLength      = 72
+)
+
+// PasswordPolicy is the structured password rule applied to organization
+// users when they register, change or reset a password. Structured flags
+// instead of a regex keep validation trivial on the server (no RE2 lookahead
+// limits) and let clients render a checklist.
+type PasswordPolicy struct {
+	MinLength        int    `json:"min_length"`
+	RequireLowercase bool   `json:"require_lowercase"`
+	RequireUppercase bool   `json:"require_uppercase"`
+	RequireDigit     bool   `json:"require_digit"`
+	RequireSymbol    bool   `json:"require_symbol"`
+	Hint             string `json:"hint"`
+}
+
+// DefaultPasswordPolicy matches the rule applied before policies existed:
+// length only, 8–72 characters.
+func DefaultPasswordPolicy() *PasswordPolicy {
+	return &PasswordPolicy{MinLength: PasswordMinLengthFloor}
+}
+
+// Normalize clamps the length and trims the hint. It never fails: an invalid
+// stored value degrades to the nearest valid one.
+func (p *PasswordPolicy) Normalize() {
+	if p.MinLength < PasswordMinLengthFloor {
+		p.MinLength = PasswordMinLengthFloor
+	}
+	if p.MinLength > PasswordMaxLength {
+		p.MinLength = PasswordMaxLength
+	}
+	p.Hint = strings.TrimSpace(p.Hint)
+}
+
+// Check reports whether password satisfies the policy. Character classes are
+// evaluated per rune so non-ASCII letters count as letters.
+func (p *PasswordPolicy) Check(password string) bool {
+	if len(password) < p.MinLength || len(password) > PasswordMaxLength {
+		return false
+	}
+	var lower, upper, digit, symbol bool
+	for _, r := range password {
+		switch {
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsDigit(r):
+			digit = true
+		default:
+			symbol = true
+		}
+	}
+	if p.RequireLowercase && !lower {
+		return false
+	}
+	if p.RequireUppercase && !upper {
+		return false
+	}
+	if p.RequireDigit && !digit {
+		return false
+	}
+	if p.RequireSymbol && !symbol {
+		return false
+	}
+	return true
+}
+
+// EffectiveHint returns the admin's hint, or a sentence generated from the
+// rules when none was set.
+func (p *PasswordPolicy) EffectiveHint() string {
+	if p.Hint != "" {
+		return p.Hint
+	}
+	parts := []string{}
+	if p.RequireLowercase {
+		parts = append(parts, "a lowercase letter")
+	}
+	if p.RequireUppercase {
+		parts = append(parts, "an uppercase letter")
+	}
+	if p.RequireDigit {
+		parts = append(parts, "a number")
+	}
+	if p.RequireSymbol {
+		parts = append(parts, "a symbol")
+	}
+	msg := fmt.Sprintf("Use at least %d characters", p.MinLength)
+	if len(parts) > 0 {
+		msg += ", including " + strings.Join(parts, ", ")
+	}
+	return msg + "."
+}
+
+// EffectivePasswordPolicy returns the policy for orgID, falling back to the
+// default when the org is unknown or has none configured.
+func EffectivePasswordPolicy(orgID int64) *PasswordPolicy {
+	if orgID <= 0 {
+		return DefaultPasswordPolicy()
+	}
+	s, err := IOrganizationDAO.GetOrganizationSettings(orgID)
+	if err != nil || s.PasswordPolicy == nil {
+		return DefaultPasswordPolicy()
+	}
+	return s.PasswordPolicy
 }

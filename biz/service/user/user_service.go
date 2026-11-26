@@ -101,7 +101,14 @@ func (s *UserService) ListUsers(req *user.ListUsersRequest) (*user.ListUsersResp
 		return nil, errno.ParamErr
 	}
 	page, pageSize := normalizePaging(req.Page, req.PageSize)
-	users, total, err := s.userDAO.ListUsersInOrg(req.OrganizationId, (page-1)*pageSize, pageSize)
+	users, total, err := s.userDAO.ListUsersInOrgFiltered(req.OrganizationId, db.UserListFilter{
+		Search:   req.Search,
+		UserName: req.UserName,
+		Email:    req.Email,
+		Phone:    req.Phone,
+		Status:   req.Status,
+		Sort:     req.Sort,
+	}, (page-1)*pageSize, pageSize)
 	if err != nil {
 		return nil, err
 	}

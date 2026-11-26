@@ -67,6 +67,45 @@ func QueryAdminUser(email string) (*AdminUser, error) {
 }
 
 // QueryAdminUserByID returns a platform account by id (self-service reads).
+// QueryAdminUsersByIDs returns the admin users for the given ids, keyed by id.
+func QueryAdminUsersByIDs(ids []int64) (map[int64]*AdminUser, error) {
+	out := make(map[int64]*AdminUser, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []*AdminUser
+	if err := DB.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = r
+	}
+	return out, nil
+}
+
+// LastSuccessfulAdminLogins returns, for each admin id, the created_at of its
+// most recent successful login (unix seconds). Ids without logs are absent.
+func LastSuccessfulAdminLogins(ids []int64) (map[int64]int64, error) {
+	out := make(map[int64]int64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		AdminID int64
+		Last    int64
+	}
+	if err := DB.Model(&AdminLoginLog{}).
+		Select("admin_id, MAX(created_at) AS last").
+		Where("admin_id IN ? AND success = ?", ids, true).
+		Group("admin_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.AdminID] = r.Last
+	}
+	return out, nil
+}
+
 func QueryAdminUserByID(id int64) (*AdminUser, error) {
 	var adminUser AdminUser
 	if err := DB.Where("id = ?", id).First(&adminUser).Error; err != nil {

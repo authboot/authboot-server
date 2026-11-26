@@ -112,6 +112,34 @@ message LeaveOrganizationResponse {
 message OrganizationSettings {
   int64 admin_token_ttl_seconds = 1[(api.go_tag)='json:"admin_token_ttl_seconds"'];
   LoginMethods login_methods = 2[(api.go_tag)='json:"login_methods"'];
+  Maintenance maintenance = 3[(api.go_tag)='json:"maintenance"'];
+  PasswordPolicy password_policy = 4[(api.go_tag)='json:"password_policy"'];
+}
+
+// 组织下普通用户的密码策略（注册 / 改密 / 重置时校验）。结构化规则而非正则，
+// 便于前端生成提示和实时勾选；最大长度固定 72（bcrypt 限制），不开放配置。
+message PasswordPolicy {
+  // 最小长度，8–72。
+  int32 min_length = 1[(api.go_tag)='json:"min_length"'];
+  bool require_lowercase = 2[(api.go_tag)='json:"require_lowercase"'];
+  bool require_uppercase = 3[(api.go_tag)='json:"require_uppercase"'];
+  bool require_digit = 4[(api.go_tag)='json:"require_digit"'];
+  bool require_symbol = 5[(api.go_tag)='json:"require_symbol"'];
+  // 密码被拒时展示给用户的提示；为空时由服务端根据规则生成。
+  string hint = 6[(api.go_tag)='json:"hint"'];
+}
+
+// 维护模式：开启后组织下普通用户的登录 / 注册 / 找回密码被拒绝，并返回公告。
+// 管理端登录不受影响。
+message Maintenance {
+  bool enabled = 1[(api.go_tag)='json:"enabled"'];
+  // 公告标题与正文，开启时必填。
+  string title = 2[(api.go_tag)='json:"title"'];
+  string message = 3[(api.go_tag)='json:"message"'];
+  // 预计恢复时间（unix 秒），0 表示未设置；仅用于展示，不会自动结束维护。
+  int64 expected_end = 4[(api.go_tag)='json:"expected_end"'];
+  // 本次维护开启时间（unix 秒），由服务端在开启时写入，关闭时清零。
+  int64 started_at = 5[(api.go_tag)='json:"started_at"'];
 }
 
 // 组织下普通用户（非 admin）可用的登录方式开关
@@ -141,6 +169,30 @@ message UpdateOrganizationSettingsResponse {
   int32 code = 1[(api.go_tag)='json:"code"'];
   string message = 2[(api.go_tag)='json:"message"'];
   OrganizationSettings settings = 3[(api.go_tag)='json:"settings"'];
+}
+
+// ------------------------------------------------------------
+// 用户端公开接口：登录页在渲染前查询组织是否维护中，用于展示完整公告。
+// 无需登录；只暴露公告本身，不含 started_at 等内部字段。
+// ------------------------------------------------------------
+message GetMaintenanceNoticeRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message MaintenanceNotice {
+  bool enabled = 1[(api.go_tag)='json:"enabled"'];
+  string title = 2[(api.go_tag)='json:"title"'];
+  string message = 3[(api.go_tag)='json:"message"'];
+  // 预计恢复时间（unix 秒），0 表示未设置。
+  int64 expected_end = 4[(api.go_tag)='json:"expected_end"'];
+}
+
+message GetMaintenanceNoticeResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  MaintenanceNotice maintenance = 3[(api.go_tag)='json:"maintenance"'];
+  // 生效的密码策略，供注册 / 改密表单做实时校验提示。
+  PasswordPolicy password_policy = 4[(api.go_tag)='json:"password_policy"'];
 }
 
 service OrganizationHandler {
@@ -182,5 +234,10 @@ service OrganizationHandler {
   // 整体替换组织设置
   rpc UpdateOrganizationSettings(UpdateOrganizationSettingsRequest) returns(UpdateOrganizationSettingsResponse) {
     option (api.put) = "/api/v1/admin/organizations/:organization_id/settings";
+  }
+
+  // 公开：组织维护公告（登录页用，无需登录）。
+  rpc GetMaintenanceNotice(GetMaintenanceNoticeRequest) returns(GetMaintenanceNoticeResponse) {
+    option (api.get) = "/api/v1/user/organizations/:organization_id/maintenance";
   }
 }

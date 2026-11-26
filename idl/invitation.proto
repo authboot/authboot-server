@@ -52,6 +52,10 @@ message ListInvitationsRequest {
   int64 organization_id = 1;
   int32 page = 2;
   int32 page_size = 3;
+  // 按邮箱模糊匹配。
+  string search = 4 [(api.query) = "search"];
+  // 0 = 全部；否则按 InvitationStatus 过滤（1 pending 等）。
+  int32 status = 5 [(api.query) = "status"];
 }
 
 message ListInvitationsResponse {
@@ -71,6 +75,15 @@ message AcceptInvitationResponse {
   membership.OrganizationMembership membership = 3[(api.go_tag)='json:"membership"'];
 }
 
+// 重发邀请：生成新 token、延长有效期并重新发送邮件；仅 pending 状态可重发。
+message ResendInvitationRequest {
+  int64 invitation_id = 1;
+}
+message ResendInvitationResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  OrganizationInvitation invitation = 3[(api.go_tag)='json:"invitation"'];
+}
 message RevokeInvitationRequest {
   int64 invitation_id = 1;
 }
@@ -99,6 +112,9 @@ service InvitationHandler {
     option (api.post) = "/api/v1/invitations/accept";
   }
 
+  rpc ResendInvitation(ResendInvitationRequest) returns(ResendInvitationResponse) {
+    option (api.post) = "/api/v1/admin/invitations/:invitation_id/resend";
+  }
   rpc RevokeInvitation(RevokeInvitationRequest) returns(RevokeInvitationResponse) {
     option (api.delete) = "/api/v1/admin/invitations/:invitation_id";
   }

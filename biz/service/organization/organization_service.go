@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path"
 	"strconv"
 	"strings"
@@ -267,6 +268,12 @@ func (s *OrganizationService) UpdateOrganizationSettings(req *organization.Updat
 		return nil, err
 	}
 	stored := fromOrganizationSettings(req.Settings)
+	if err := applyMaintenanceTransition(stored, before); err != nil {
+		return nil, err
+	}
+	if err := validatePasswordPolicy(stored.PasswordPolicy); err != nil {
+		return nil, err
+	}
 	if err := s.organizationDAO.SaveOrganizationSettings(req.OrganizationId, stored); err != nil {
 		return nil, err
 	}
@@ -286,6 +293,43 @@ func (s *OrganizationService) UpdateOrganizationSettings(req *organization.Updat
 	return toOrganizationSettings(effective), nil
 }
 
+// GetMaintenanceNotice 返回组织的维护公告（公开接口，无需登录）。只暴露展示
+// 所需字段；组织不存在或未开启维护时返回 enabled=false 且文案为空，不泄露配置。
+func (s *OrganizationService) GetMaintenanceNotice(organizationId int64) (*organization.MaintenanceNotice, error) {
+	if organizationId <= 0 {
+		return nil, errno.ParamErr
+	}
+	settings, err := s.organizationDAO.GetOrganizationSettings(organizationId)
+	if err != nil {
+		// 不区分"组织不存在"和"读取失败"，统一当作未维护，避免被用来探测组织 id。
+		return &organization.MaintenanceNotice{}, nil
+	}
+	if !settings.MaintenanceActive() {
+		return &organization.MaintenanceNotice{}, nil
+	}
+	m := settings.Maintenance
+	return &organization.MaintenanceNotice{
+		Enabled:     true,
+		Title:       m.Title,
+		Message:     m.Message,
+		ExpectedEnd: m.ExpectedEnd,
+	}, nil
+}
+
+// PublicPasswordPolicy 返回组织生效的密码策略（公开接口用）；组织不存在时
+// 返回默认策略，不暴露组织是否存在。
+func (s *OrganizationService) PublicPasswordPolicy(organizationId int64) *organization.PasswordPolicy {
+	p := db.EffectivePasswordPolicy(organizationId)
+	return &organization.PasswordPolicy{
+		MinLength:        int32(p.MinLength),
+		RequireLowercase: p.RequireLowercase,
+		RequireUppercase: p.RequireUppercase,
+		RequireDigit:     p.RequireDigit,
+		RequireSymbol:    p.RequireSymbol,
+		Hint:             p.EffectiveHint(),
+	}
+}
+
 // toOrganizationSettings 把 DB 层设置模型转成 API DTO；登录方式副本拷贝，
 // 避免调用方修改影响持久化层缓存。
 func toOrganizationSettings(s *db.OrganizationSettings) *organization.OrganizationSettings {
@@ -303,7 +347,81 @@ func toOrganizationSettings(s *db.OrganizationSettings) *organization.Organizati
 			OauthProviders: append([]string(nil), s.LoginMethods.OAuthProviders...),
 		}
 	}
+	// Always return the effective password policy (default when unset) so the
+	// admin UI shows what users are actually held to.
+	policy := s.PasswordPolicy
+	if policy == nil {
+		policy = db.DefaultPasswordPolicy()
+	}
+	out.PasswordPolicy = &organization.PasswordPolicy{
+		MinLength:        int32(policy.MinLength),
+		RequireLowercase: policy.RequireLowercase,
+		RequireUppercase: policy.RequireUppercase,
+		RequireDigit:     policy.RequireDigit,
+		RequireSymbol:    policy.RequireSymbol,
+		Hint:             policy.Hint,
+	}
+	// Always return a maintenance object so the admin UI never has to special
+	// case "never configured".
+	out.Maintenance = &organization.Maintenance{}
+	if s.Maintenance != nil {
+		out.Maintenance = &organization.Maintenance{
+			Enabled:     s.Maintenance.Enabled,
+			Title:       s.Maintenance.Title,
+			Message:     s.Maintenance.Message,
+			ExpectedEnd: s.Maintenance.ExpectedEnd,
+			StartedAt:   s.Maintenance.StartedAt,
+		}
+	}
 	return out
+}
+
+const (
+	maintenanceTitleMax   = 80
+	maintenanceMessageMax = 500
+	passwordHintMax       = 200
+)
+
+// validatePasswordPolicy rejects out-of-range lengths and over-long hints
+// instead of silently clamping, so the admin sees the mistake.
+func validatePasswordPolicy(p *db.PasswordPolicy) error {
+	if p == nil {
+		return nil
+	}
+	if p.MinLength < db.PasswordMinLengthFloor || p.MinLength > db.PasswordMaxLength {
+		return fmt.Errorf("password min_length must be between %d and %d", db.PasswordMinLengthFloor, db.PasswordMaxLength)
+	}
+	if len([]rune(p.Hint)) > passwordHintMax {
+		return fmt.Errorf("password hint exceeds %d characters", passwordHintMax)
+	}
+	return nil
+}
+
+// applyMaintenanceTransition validates the submitted maintenance block and
+// stamps started_at: set when maintenance turns on, kept while it stays on,
+// cleared when it turns off. started_at from the client is ignored.
+func applyMaintenanceTransition(next, prev *db.OrganizationSettings) error {
+	if next.Maintenance == nil {
+		return nil
+	}
+	m := next.Maintenance
+	m.Title = strings.TrimSpace(m.Title)
+	m.Message = strings.TrimSpace(m.Message)
+	if len([]rune(m.Title)) > maintenanceTitleMax || len([]rune(m.Message)) > maintenanceMessageMax {
+		return errno.ParamErr
+	}
+	if m.Enabled && (m.Title == "" || m.Message == "") {
+		return fmt.Errorf("maintenance notice title and message are required to turn maintenance on")
+	}
+	switch {
+	case !m.Enabled:
+		m.StartedAt = 0
+	case prev != nil && prev.MaintenanceActive():
+		m.StartedAt = prev.Maintenance.StartedAt
+	default:
+		m.StartedAt = time.Now().Unix()
+	}
+	return nil
 }
 
 // fromOrganizationSettings 把 API DTO 转成 DB 层设置模型用于持久化。
@@ -320,6 +438,24 @@ func fromOrganizationSettings(s *organization.OrganizationSettings) *db.Organiza
 			EmailCode:      s.LoginMethods.EmailCode,
 			PhoneCode:      s.LoginMethods.PhoneCode,
 			OAuthProviders: append([]string(nil), s.LoginMethods.OauthProviders...),
+		}
+	}
+	if s.PasswordPolicy != nil {
+		stored.PasswordPolicy = &db.PasswordPolicy{
+			MinLength:        int(s.PasswordPolicy.MinLength),
+			RequireLowercase: s.PasswordPolicy.RequireLowercase,
+			RequireUppercase: s.PasswordPolicy.RequireUppercase,
+			RequireDigit:     s.PasswordPolicy.RequireDigit,
+			RequireSymbol:    s.PasswordPolicy.RequireSymbol,
+			Hint:             strings.TrimSpace(s.PasswordPolicy.Hint),
+		}
+	}
+	if s.Maintenance != nil {
+		stored.Maintenance = &db.Maintenance{
+			Enabled:     s.Maintenance.Enabled,
+			Title:       s.Maintenance.Title,
+			Message:     s.Maintenance.Message,
+			ExpectedEnd: s.Maintenance.ExpectedEnd,
 		}
 	}
 	return stored

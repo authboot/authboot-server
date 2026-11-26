@@ -81,6 +81,8 @@ const (
 
 	// organization settings error codes
 	LoginMethodDisabledErrCode
+	OrganizationMaintenanceErrCode
+	PasswordPolicyErrCode
 )
 
 const (
@@ -165,6 +167,12 @@ var (
 
 	// organization settings errors
 	LoginMethodDisabledErr = NewErrNo(LoginMethodDisabledErrCode, "this sign-in method is disabled by the organization")
+	// OrganizationMaintenanceErr is returned to end users while the organization
+	// is in maintenance mode; the message carries the admin's notice title.
+	OrganizationMaintenanceErr = NewErrNo(OrganizationMaintenanceErrCode, "this organization is under maintenance")
+	// PasswordPolicyErr is returned when a new password fails the organization's
+	// policy; the message is replaced with the policy hint.
+	PasswordPolicyErr = NewErrNo(PasswordPolicyErrCode, "password does not meet the organization's policy")
 )
 
 // ConvertErr convert error to Errno

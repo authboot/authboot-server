@@ -46,8 +46,9 @@ func Register(r *server.Hertz) {
 				_user := _v1.Group("/user", _userMw()...)
 				_user.GET("/identities", append(_listmyidentitiesMw(), user.ListMyIdentities)...)
 				_user.GET("/profile", append(_getmyprofileMw(), user.GetMyProfile)...)
+				_profile := _user.Group("/profile", _profileMw()...)
+				_profile.POST("/avatar", append(_uploadmyavatarMw(), user.UploadMyAvatar)...)
 				_user.PUT("/profile", append(_updatemyprofileMw(), user.UpdateMyProfile)...)
-				_user.POST("/profile/avatar", user.UploadMyAvatar)
 				{
 					_identities := _user.Group("/identities", _identitiesMw()...)
 					_identities.POST("/bind", append(_bindidentityMw(), user.BindIdentity)...)

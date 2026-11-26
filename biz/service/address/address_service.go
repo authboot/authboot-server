@@ -22,6 +22,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
+	address "github.com/authboot/authboot-server/biz/model/address"
 	"github.com/authboot/authboot-server/pkg/errno"
 )
 
@@ -108,4 +109,97 @@ func (s *AddressService) SetDefaultAddress(addressID int64) error {
 		return err
 	}
 	return db.SetDefaultUserAddress(userID, addressID)
+}
+
+// ---------------------------------------------------------------------------
+// Admin (management) side: an admin edits a user's address book. Ownership
+// comes from the path (organization_id, user_id); the user must belong to the
+// organization or every call fails with UserIsNotExistErr.
+// ---------------------------------------------------------------------------
+
+// AdminAddressService manages one organization user's address book.
+type AdminAddressService struct {
+	ctx    context.Context
+	c      *app.RequestContext
+	orgID  int64
+	userID int64
+}
+
+// NewAdminAddressService resolves the target user and checks it belongs to the
+// organization in the path.
+func NewAdminAddressService(ctx context.Context, c *app.RequestContext, orgID, userID int64) (*AdminAddressService, error) {
+	if orgID <= 0 || userID <= 0 {
+		return nil, errno.ParamErr
+	}
+	u, err := db.IUserDAO.QueryUserById(userID)
+	if err != nil {
+		return nil, err
+	}
+	if u.OrganizationID != orgID {
+		return nil, errno.UserIsNotExistErr
+	}
+	return &AdminAddressService{ctx: ctx, c: c, orgID: orgID, userID: userID}, nil
+}
+
+// List returns the user's address book, default first.
+func (s *AdminAddressService) List() ([]*db.UserAddress, error) {
+	return db.ListUserAddressesInOrg(s.orgID, s.userID)
+}
+
+// Create adds an address for the user; the 10-address cap and first-is-default
+// rule are enforced in the dal.
+func (s *AdminAddressService) Create(addr *db.UserAddress) (*db.UserAddress, error) {
+	addr.ID = 0
+	addr.OrganizationID = s.orgID
+	addr.UserID = s.userID
+	if err := db.CreateUserAddress(addr); err != nil {
+		return nil, err
+	}
+	return addr, nil
+}
+
+// Update replaces the editable fields of one address.
+func (s *AdminAddressService) Update(addr *db.UserAddress) (*db.UserAddress, error) {
+	addr.OrganizationID = s.orgID
+	addr.UserID = s.userID
+	if err := db.UpdateUserAddress(addr); err != nil {
+		return nil, err
+	}
+	return addr, nil
+}
+
+// Delete removes one address; if it was the default the newest remaining one
+// becomes default.
+func (s *AdminAddressService) Delete(addressID int64) error {
+	return db.DeleteUserAddress(s.userID, addressID)
+}
+
+// SetDefault marks one address as the default.
+func (s *AdminAddressService) SetDefault(addressID int64) error {
+	return db.SetDefaultUserAddress(s.userID, addressID)
+}
+
+// ToAPI converts a stored address to the API shape (unix-second timestamps).
+func ToAPI(a *db.UserAddress) *address.UserAddress {
+	return &address.UserAddress{
+		Id:            a.ID,
+		ReceiverName:  a.ReceiverName,
+		ReceiverPhone: a.ReceiverPhone,
+		Province:      a.Province,
+		City:          a.City,
+		District:      a.District,
+		Detail:        a.Detail,
+		IsDefault:     a.IsDefault,
+		CreatedAt:     a.CreatedAt.Unix(),
+		UpdatedAt:     a.UpdatedAt.Unix(),
+	}
+}
+
+// ToAPIList converts a slice of stored addresses.
+func ToAPIList(list []*db.UserAddress) []*address.UserAddress {
+	out := make([]*address.UserAddress, 0, len(list))
+	for _, a := range list {
+		out = append(out, ToAPI(a))
+	}
+	return out
 }

@@ -249,3 +249,33 @@ func UpdateOrganizationSettings(ctx context.Context, c *app.RequestContext) {
 		Settings: data,
 	})
 }
+
+// GetMaintenanceNotice .
+// @router /api/v1/user/organizations/:organization_id/maintenance [GET]
+func GetMaintenanceNotice(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req organization.GetMaintenanceNoticeRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	svc := service.NewOrganizationService(ctx, c)
+	notice, err := svc.GetMaintenanceNotice(req.OrganizationId)
+	if err != nil {
+		resp := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, organization.GetMaintenanceNoticeResponse{
+			Code:    resp.StatusCode,
+			Message: resp.StatusMsg,
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, organization.GetMaintenanceNoticeResponse{
+		Code:           errno.SuccessCode,
+		Message:        errno.SuccessMsg,
+		Maintenance:    notice,
+		PasswordPolicy: svc.PublicPasswordPolicy(req.OrganizationId),
+	})
+}

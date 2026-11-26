@@ -132,3 +132,27 @@ func UpdateMySettings(ctx context.Context, c *app.RequestContext) {
 
 	c.JSON(consts.StatusOK, resp)
 }
+
+// ListMyLoginLogs .
+// @router /api/v1/admin/me/login-logs [GET]
+func ListMyLoginLogs(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req admin.ListMyLoginLogsRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	resp, err := service.NewAdminUserService(ctx, c).ListMyLoginLogs(&req)
+	if err != nil {
+		base := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, admin.ListMyLoginLogsResponse{
+			Code:    base.StatusCode,
+			Message: base.StatusMsg,
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, resp)
+}

@@ -136,6 +136,24 @@ CREATE TABLE `tb_message_provider_configs` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------
+-- 1.5.2 邮件模板覆盖（每组织 × 模板一行；没有记录则使用后端内置默认模板）
+--   template_id：verification_code / invitation / security_alert。
+--   subject / body 为 Go html/template 语法，服务端保存前已解析并试渲染。
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS `tb_email_templates`;
+CREATE TABLE `tb_email_templates` (
+  `id`              bigint        NOT NULL AUTO_INCREMENT,
+  `organization_id` bigint        NOT NULL,
+  `template_id`     varchar(32)   NOT NULL,
+  `subject`         varchar(255)  NOT NULL,
+  `body`            text          NOT NULL,
+  `created_at`      datetime(3)   NOT NULL,
+  `updated_at`      datetime(3)   NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_org_template` (`organization_id`, `template_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------
 -- 1.6 应用客户端（登录入口：ios / android / h5 / mini_program）
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS `tb_app_clients`;

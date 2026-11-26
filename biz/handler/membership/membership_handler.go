@@ -5,6 +5,7 @@ package membership
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/authboot/authboot-server/biz/dal/db"
 	membership "github.com/authboot/authboot-server/biz/model/membership"
@@ -58,13 +59,58 @@ func ListMembers(ctx context.Context, c *app.RequestContext) {
 	var total int64
 	var rows []db.OrganizationMembership
 	query := db.DB.Model(&db.OrganizationMembership{}).Where("organization_id = ?", orgID)
-	if query.Count(&total).Error != nil || query.Order("id").Offset((page-1)*size).Limit(size).Find(&rows).Error != nil {
+	// Search matches the linked account's email or nickname; done as a
+	// subquery so paging and total stay correct.
+	if q := strings.TrimSpace(req.Search); q != "" {
+		like := "%" + q + "%"
+		query = query.Where("account_id IN (?)",
+			db.DB.Model(&db.AdminUser{}).Select("id").Where("email LIKE ? OR user_name LIKE ?", like, like))
+	}
+	if role := strings.TrimSpace(req.Role); role != "" {
+		query = query.Where("role = ?", role)
+	}
+	if req.Status != 0 {
+		query = query.Where("status = ?", req.Status)
+	}
+	// MFA lives on the account, not the membership: 1 = enabled, 2 = disabled.
+	if req.Mfa == 1 || req.Mfa == 2 {
+		query = query.Where("account_id IN (?)",
+			db.DB.Model(&db.AdminUser{}).Select("id").Where("mfa_enabled = ?", req.Mfa == 1))
+	}
+	if query.Count(&total).Error != nil || query.Order("created_at DESC, id DESC").Offset((page-1)*size).Limit(size).Find(&rows).Error != nil {
 		c.AbortWithStatus(500)
 		return
 	}
+	// Enrich with the linked platform accounts so the roster can show who the
+	// member is without a second round trip per row.
+	ids := make([]int64, 0, len(rows))
+	for i := range rows {
+		ids = append(ids, rows[i].AccountID)
+	}
+	accounts, err := db.QueryAdminUsersByIDs(ids)
+	if err != nil {
+		c.AbortWithStatus(500)
+		return
+	}
+	lastLogins, err := db.LastSuccessfulAdminLogins(ids)
+	if err != nil {
+		c.AbortWithStatus(500)
+		return
+	}
+	me := c.GetInt64(jwt.CtxKeyUserID)
+
 	resp := &membership.ListMembersResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg, Total: total, Members: make([]*membership.OrganizationMembership, 0, len(rows))}
 	for i := range rows {
-		resp.Members = append(resp.Members, membershipInfo(&rows[i]))
+		info := membershipInfo(&rows[i])
+		if acc, ok := accounts[rows[i].AccountID]; ok {
+			info.Email = acc.Email
+			info.Nickname = acc.UserName
+			info.Avatar = acc.Avatar
+			info.MfaEnabled = acc.MFAEnabled
+		}
+		info.LastLoginAt = lastLogins[rows[i].AccountID]
+		info.IsCurrentUser = rows[i].AccountID == me
+		resp.Members = append(resp.Members, info)
 	}
 
 	c.JSON(consts.StatusOK, resp)

@@ -38,6 +38,16 @@ func Register(r *server.Hertz) {
 				_organizations0.GET("/:organization_id", append(_getorganizationMw(), organization.GetOrganization)...)
 				_organizations0.PUT("/:organization_id", append(_updateorganizationMw(), organization.UpdateOrganization)...)
 			}
+			{
+				_user := _v1.Group("/user", _userMw()...)
+				{
+					_organizations1 := _user.Group("/organizations", _organizations1Mw()...)
+					{
+						_organization_id0 := _organizations1.Group("/:organization_id", _organization_id0Mw()...)
+						_organization_id0.GET("/maintenance", append(_getmaintenancenoticeMw(), organization.GetMaintenanceNotice)...)
+					}
+				}
+			}
 		}
 	}
 }

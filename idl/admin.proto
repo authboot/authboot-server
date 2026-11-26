@@ -77,6 +77,33 @@ message UpdateMySettingsResponse {
   map<string, string> settings = 3[(api.go_tag)='json:"settings"'];
 }
 
+// ---- 自己的登录历史（tb_admin_login_logs，按 token 里的 admin_id 过滤）----
+
+message AdminLoginLog {
+  int64 id = 1[(api.go_tag)='json:"id"'];
+  string email = 2[(api.go_tag)='json:"email"'];
+  string device_id = 3[(api.go_tag)='json:"device_id"'];
+  string device_name = 4[(api.go_tag)='json:"device_name"'];
+  string ip = 5[(api.go_tag)='json:"ip"'];
+  string user_agent = 6[(api.go_tag)='json:"user_agent"'];
+  bool success = 7[(api.go_tag)='json:"success"'];
+  string err_msg = 8[(api.go_tag)='json:"err_msg"'];
+  int64 created_at = 9[(api.go_tag)='json:"created_at"'];
+}
+
+message ListMyLoginLogsRequest {
+  int32 success = 1 [(api.query) = "success"]; // 0=全部 1=成功 2=失败
+  int32 page = 2 [(api.query) = "page"];
+  int32 page_size = 3 [(api.query) = "page_size"];
+}
+
+message ListMyLoginLogsResponse {
+  int32 code = 1[(api.go_tag)='json:"code"'];
+  string message = 2[(api.go_tag)='json:"message"'];
+  repeated AdminLoginLog logs = 3[(api.go_tag)='json:"logs"'];
+  int64 total = 4[(api.go_tag)='json:"total"'];
+}
+
 // 管理员自服务接口：身份一律取自 token，不接收 account_id。
 service AdminUserHandler {
   rpc GetMyProfile(GetMyProfileRequest) returns(GetMyProfileResponse) {
@@ -100,5 +127,9 @@ service AdminUserHandler {
 
   rpc UpdateMySettings(UpdateMySettingsRequest) returns(UpdateMySettingsResponse) {
     option (api.put) = "/api/v1/admin/me/settings";
+  }
+
+  rpc ListMyLoginLogs(ListMyLoginLogsRequest) returns(ListMyLoginLogsResponse) {
+    option (api.get) = "/api/v1/admin/me/login-logs";
   }
 }

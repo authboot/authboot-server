@@ -158,6 +158,13 @@ func (s *SessionService) ListAdminSessions(req *session.ListAdminSessionsRequest
 	}
 	page, pageSize := normalizePaging(req.Page, req.PageSize)
 	items, total := paginateAdminSessions(recs, page, pageSize)
+	if sid, ok := s.c.Get(jwt.CtxKeySessionID); ok {
+		if current, _ := sid.(string); current != "" {
+			for _, it := range items {
+				it.Current = it.SessionId == current
+			}
+		}
+	}
 	return &session.ListAdminSessionsResponse{
 		Code:     errno.SuccessCode,
 		Message:  errno.SuccessMsg,

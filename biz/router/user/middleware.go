@@ -141,3 +141,13 @@ func _unbindidentityMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _profileMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _uploadmyavatarMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

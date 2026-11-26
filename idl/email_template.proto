@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package emailtemplate;
+
+import "api.proto";
+
+option go_package = "emailtemplate";
+
+// ============================================================
+// 邮件模板按 Organization 自定义
+//   1. 后端维护模板目录：每封系统邮件一个模板 id，声明可用变量与内置默认文案。
+//   2. 平台管理员可为某个 Organization 覆盖某模板的主题和正文（Go html/template 语法）。
+//      保存时服务端先解析并用示例变量渲染一次，失败不落库。
+//   3. 发信时按 Organization 取自定义模板，没有则用内置默认；编译结果在进程内缓存。
+// ============================================================
+
+message TemplateVariable {
+  // 在模板中以 {{.Name}} 引用。
+  string name = 1 [(api.go_tag)='json:"name"'];
+  string description = 2 [(api.go_tag)='json:"description"'];
+  // 预览和测试邮件中使用的示例值。
+  string sample = 3 [(api.go_tag)='json:"sample"'];
+  // 正文必须引用该变量。
+  bool required = 4 [(api.go_tag)='json:"required"'];
+}
+
+// 目录中的一个模板。
+message TemplateDescriptor {
+  // 模板标识：verification_code / invitation / security_alert。
+  string template_id = 1 [(api.go_tag)='json:"template_id"'];
+  string name = 2 [(api.go_tag)='json:"name"'];
+  // 何时发送，一句话。
+  string trigger = 3 [(api.go_tag)='json:"trigger"'];
+  repeated TemplateVariable variables = 4 [(api.go_tag)='json:"variables"'];
+  string default_subject = 5 [(api.go_tag)='json:"default_subject"'];
+  // HTML。
+  string default_body = 6 [(api.go_tag)='json:"default_body"'];
+}
+
+// 某 Organization 对某模板的覆盖。
+message TemplateOverride {
+  int64 organization_id = 1 [(api.go_tag)='json:"organization_id"'];
+  string template_id = 2 [(api.go_tag)='json:"template_id"'];
+  string subject = 3 [(api.go_tag)='json:"subject"'];
+  string body = 4 [(api.go_tag)='json:"body"'];
+  int64 created_at = 5 [(api.go_tag)='json:"created_at"'];
+  int64 updated_at = 6 [(api.go_tag)='json:"updated_at"'];
+}
+
+message ListTemplateCatalogRequest {}
+
+message ListTemplateCatalogResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  repeated TemplateDescriptor templates = 3 [(api.go_tag)='json:"templates"'];
+}
+
+message ListTemplateOverridesRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+}
+
+message ListTemplateOverridesResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  repeated TemplateOverride overrides = 3 [(api.go_tag)='json:"overrides"'];
+}
+
+// 保存覆盖：服务端解析主题和正文模板，并用示例变量渲染一次；失败不落库。
+message SetTemplateOverrideRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string template_id = 2 [(api.path) = "template_id", (api.vd) = "$!=''"];
+  string subject = 3 [(api.vd) = "$!=''"];
+  string body = 4 [(api.vd) = "$!=''"];
+}
+
+message SetTemplateOverrideResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  TemplateOverride override = 3 [(api.go_tag)='json:"override"'];
+}
+
+// 删除覆盖，恢复内置默认。
+message ResetTemplateOverrideRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string template_id = 2 [(api.path) = "template_id", (api.vd) = "$!=''"];
+}
+
+message ResetTemplateOverrideResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+}
+
+// 预览：用示例变量渲染给定的主题/正文（不落库）。subject/body 为空时用该组织当前生效的模板。
+message PreviewTemplateRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string template_id = 2 [(api.path) = "template_id", (api.vd) = "$!=''"];
+  string subject = 3;
+  string body = 4;
+}
+
+message PreviewTemplateResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+  string subject = 3 [(api.go_tag)='json:"subject"'];
+  string html = 4 [(api.go_tag)='json:"html"'];
+}
+
+// 发测试邮件：用示例变量渲染后通过该组织的邮件供应商发送。
+message SendTestTemplateRequest {
+  int64 organization_id = 1 [(api.path) = "organization_id", (api.vd) = "$!=''"];
+  string template_id = 2 [(api.path) = "template_id", (api.vd) = "$!=''"];
+  string subject = 3;
+  string body = 4;
+  // 为空时发给当前管理员邮箱。
+  string recipient = 5;
+}
+
+message SendTestTemplateResponse {
+  int32 code = 1 [(api.go_tag)='json:"code"'];
+  string message = 2 [(api.go_tag)='json:"message"'];
+}
+
+// 邮件模板管理（平台管理员，Organization 维度）
+service EmailTemplateAdminHandler {
+  rpc ListTemplateCatalog(ListTemplateCatalogRequest) returns(ListTemplateCatalogResponse) {
+    option (api.get) = "/api/v1/admin/email-templates";
+  }
+
+  rpc ListTemplateOverrides(ListTemplateOverridesRequest) returns(ListTemplateOverridesResponse) {
+    option (api.get) = "/api/v1/admin/organizations/:organization_id/email-templates";
+  }
+
+  rpc SetTemplateOverride(SetTemplateOverrideRequest) returns(SetTemplateOverrideResponse) {
+    option (api.put) = "/api/v1/admin/organizations/:organization_id/email-templates/:template_id";
+  }
+
+  rpc ResetTemplateOverride(ResetTemplateOverrideRequest) returns(ResetTemplateOverrideResponse) {
+    option (api.delete) = "/api/v1/admin/organizations/:organization_id/email-templates/:template_id";
+  }
+
+  rpc PreviewTemplate(PreviewTemplateRequest) returns(PreviewTemplateResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/email-templates/:template_id/preview";
+  }
+
+  rpc SendTestTemplate(SendTestTemplateRequest) returns(SendTestTemplateResponse) {
+    option (api.post) = "/api/v1/admin/organizations/:organization_id/email-templates/:template_id/test";
+  }
+}

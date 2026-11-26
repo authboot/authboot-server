@@ -86,3 +86,15 @@ func _acceptinvitationMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _invitation_idMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _resendinvitationMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		jwt.AdminSessionAuth(),
+		audit.Middleware(),
+	}
+}

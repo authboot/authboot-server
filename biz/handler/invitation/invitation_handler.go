@@ -148,3 +148,31 @@ func RevokeInvitation(ctx context.Context, c *app.RequestContext) {
 		Message: errno.SuccessMsg,
 	})
 }
+
+// ResendInvitation .
+// @router /api/v1/admin/invitations/:invitation_id/resend [POST]
+func ResendInvitation(ctx context.Context, c *app.RequestContext) {
+	var err error
+	var req invitation.ResendInvitationRequest
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.String(consts.StatusBadRequest, err.Error())
+		return
+	}
+
+	inv, err := service.NewInviteService(ctx, c).ResendInvitation(&req)
+	if err != nil {
+		resp := utils.BuildBaseResp(err)
+		c.JSON(consts.StatusOK, invitation.ResendInvitationResponse{
+			Code:    resp.StatusCode,
+			Message: resp.StatusMsg,
+		})
+		return
+	}
+
+	c.JSON(consts.StatusOK, invitation.ResendInvitationResponse{
+		Code:       errno.SuccessCode,
+		Message:    errno.SuccessMsg,
+		Invitation: inv,
+	})
+}

@@ -27,6 +27,8 @@ func Register(r *server.Hertz) {
 					_invitations := _admin.Group("/invitations", _invitationsMw()...)
 					_invitations.DELETE("/:invitation_id", append(_revokeinvitationMw(), invitation.RevokeInvitation)...)
 					_invitations.GET("/:invitation_id", append(_getinvitationMw(), invitation.GetInvitation)...)
+					_invitation_id := _invitations.Group("/:invitation_id", _invitation_idMw()...)
+					_invitation_id.POST("/resend", append(_resendinvitationMw(), invitation.ResendInvitation)...)
 				}
 				{
 					_organizations := _admin.Group("/organizations", _organizationsMw()...)

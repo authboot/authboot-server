@@ -66,6 +66,8 @@ message AdminSession {
   int64 created_at = 9;
   int64 expires_at = 10;
   int64 last_active_at = 11;
+  // 是否为发起本次请求的会话（仅在查询自己的会话时有意义）。
+  bool current = 12;
 }
 
 message GetSessionRequest {

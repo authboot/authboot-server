@@ -74,6 +74,16 @@ message ListUsersRequest {
   int64 organization_id = 1;
   int32 page = 2;
   int32 page_size = 3;
+  // 模糊匹配用户名 / 邮箱 / 手机号。
+  string search = 4 [(api.query) = "search"];
+  // 精确字段过滤（模糊匹配）。
+  string user_name = 5 [(api.query) = "user_name"];
+  string email = 6 [(api.query) = "email"];
+  string phone = 7 [(api.query) = "phone"];
+  // common.Status 数值；0 为全部。
+  int32 status = 8 [(api.query) = "status"];
+  // 排序：created_at_desc（默认）/ created_at_asc / updated_at_desc / updated_at_asc。
+  string sort = 9 [(api.query) = "sort"];
 }
 
 message ListUsersResponse {

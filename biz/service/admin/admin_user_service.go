@@ -155,6 +155,47 @@ func (s *AdminUserService) UpdateMySettings(req *adminmodel.UpdateMySettingsRequ
 	}, nil
 }
 
+// ListMyLoginLogs returns the signed-in admin's own login history, newest
+// first. Identity comes from the token so an admin can never read another
+// account's logs through this endpoint.
+func (s *AdminUserService) ListMyLoginLogs(req *adminmodel.ListMyLoginLogsRequest) (*adminmodel.ListMyLoginLogsResponse, error) {
+	u, err := s.currentAdmin()
+	if err != nil {
+		return nil, err
+	}
+	page, size := int(req.Page), int(req.PageSize)
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 20
+	}
+	rows, total, err := db.QueryAdminLoginLogs(db.AdminLoginLogFilter{AdminID: u.ID, Success: req.Success}, (page-1)*size, size)
+	if err != nil {
+		return nil, err
+	}
+	logs := make([]*adminmodel.AdminLoginLog, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, &adminmodel.AdminLoginLog{
+			Id:         r.ID,
+			Email:      r.Email,
+			DeviceId:   r.DeviceID,
+			DeviceName: r.DeviceName,
+			Ip:         r.IP,
+			UserAgent:  r.UserAgent,
+			Success:    r.Success,
+			ErrMsg:     r.ErrMsg,
+			CreatedAt:  r.CreatedAt,
+		})
+	}
+	return &adminmodel.ListMyLoginLogsResponse{
+		Code:    errno.SuccessCode,
+		Message: errno.SuccessMsg,
+		Logs:    logs,
+		Total:   total,
+	}, nil
+}
+
 // currentAdmin resolves the signed-in platform account from the token context
 // (AdminSessionAuth sets CtxKeyUserID to the admin id).
 func (s *AdminUserService) currentAdmin() (*db.AdminUser, error) {

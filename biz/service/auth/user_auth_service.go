@@ -92,6 +92,9 @@ func NewAuthService(ctx context.Context, c *app.RequestContext) *AuthService {
 //   - SMS code           : req.IdentityType == PHONE,  value=phone, credential=code
 //   - 微信 OAuth          : req.IdentityType == WECHAT, credential=授权 code
 func (s *AuthService) Login(req *auth.LoginRequest) (*auth.LoginResponse, error) {
+	if err := s.checkMaintenance(req.OrganizationId); err != nil {
+		return nil, err
+	}
 	u, err := s.authenticate(req)
 	if err != nil {
 		s.recordLogin(req, 0, err)
@@ -116,6 +119,42 @@ const (
 	loginMethodEmailCode     loginMethod = "email_code"     // 邮箱验证码
 	loginMethodPhoneCode     loginMethod = "phone_code"     // 手机验证码
 )
+
+// checkPasswordPolicy validates a new password against the organization's
+// policy (default: 8–72 characters). The returned error carries the policy
+// hint so clients can show users what is missing.
+func (s *AuthService) checkPasswordPolicy(orgID int64, password string) error {
+	policy := db.EffectivePasswordPolicy(orgID)
+	if policy.Check(password) {
+		return nil
+	}
+	e := errno.PasswordPolicyErr
+	e.ErrMsg = policy.EffectiveHint()
+	return e
+}
+
+// checkMaintenance rejects end-user auth flows while the organization is in
+// maintenance mode. The error message carries the notice title so clients can
+// show it. Settings load failures let the request through, like the login
+// method gate.
+func (s *AuthService) checkMaintenance(orgID int64) error {
+	if orgID <= 0 {
+		return nil
+	}
+	settings, err := s.organizationDAO.GetOrganizationSettings(orgID)
+	if err != nil {
+		hlog.CtxErrorf(s.ctx, "load org %d settings for maintenance gate: %v", orgID, err)
+		return nil
+	}
+	if !settings.MaintenanceActive() {
+		return nil
+	}
+	e := errno.OrganizationMaintenanceErr
+	if t := strings.TrimSpace(settings.Maintenance.Title); t != "" {
+		e.ErrMsg = e.ErrMsg + ": " + t
+	}
+	return e
+}
 
 // checkLoginMethodAllowed 校验组织设置是否允许该登录方式。OAuth 提供商同样
 // 经由此函数校验（method 为非固定开关值时查 oauth_providers 列表）。
@@ -356,6 +395,9 @@ func (s *AuthService) loginByWechat(req *auth.LoginRequest) (*db.User, error) {
 //   - PHONE   : Credential == 短信验证码 (verified, not stored)
 //   - WECHAT  : Credential == 微信授权 code (exchanged for openid, not stored)
 func (s *AuthService) Register(req *auth.RegisterRequest) (*auth.LoginResponse, error) {
+	if err := s.checkMaintenance(req.OrganizationId); err != nil {
+		return nil, err
+	}
 	switch req.IdentityType {
 	case common.IdentityType_IDENTITY_TYPE_UNKNOWN:
 		if err := s.checkLoginMethodAllowed(req.OrganizationId, loginMethodEmailPassword); err != nil {
@@ -386,8 +428,11 @@ func (s *AuthService) Register(req *auth.RegisterRequest) (*auth.LoginResponse, 
 // account password. This is the only register flow where Credential means a
 // password: it is bcrypt-hashed and stored on the user.
 func (s *AuthService) registerByPassword(req *auth.RegisterRequest) (*auth.LoginResponse, error) {
-	if req.IdentityValue == "" || !utils.ValidNewPassword(req.Credential) {
+	if req.IdentityValue == "" {
 		return nil, errno.ParamErr
+	}
+	if err := s.checkPasswordPolicy(req.OrganizationId, req.Credential); err != nil {
+		return nil, err
 	}
 	passwordHash, err := utils.Crypt(req.Credential)
 	if err != nil {
@@ -669,11 +714,11 @@ func (s *AuthService) recordUserAudit(u *db.User, action, resourceType, resource
 // already set the old one must match; accounts created via OAuth / code only
 // have no password and must use ResetPassword instead.
 func (s *AuthService) ChangePassword(req *auth.ChangePasswordRequest) (*auth.ChangePasswordResponse, error) {
-	if !utils.ValidNewPassword(req.NewPassword) {
-		return nil, errno.ParamErr
-	}
 	u, err := s.currentUser()
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkPasswordPolicy(u.OrganizationID, req.NewPassword); err != nil {
 		return nil, err
 	}
 	if !(redis.Code{}).Allow(fmt.Sprintf("password-proof:user:%d:%d", u.OrganizationID, u.ID), 5, 5*time.Minute) {
@@ -701,12 +746,18 @@ func (s *AuthService) ChangePassword(req *auth.ChangePasswordRequest) (*auth.Cha
 // email/phone and replaces the account password. Every existing session is
 // revoked afterwards, so a compromised account is signed out everywhere.
 func (s *AuthService) ResetPassword(req *auth.ResetPasswordRequest) (*auth.ResetPasswordResponse, error) {
-	if req.OrganizationId == 0 || req.IdentityValue == "" || req.Credential == "" || !utils.ValidNewPassword(req.NewPassword) {
+	if req.OrganizationId == 0 || req.IdentityValue == "" || req.Credential == "" {
 		return nil, errno.ParamErr
 	}
 	identityType := identityTypeOf(req.IdentityType)
 	if identityType == "" {
 		return nil, errno.ParamErr
+	}
+	if err := s.checkMaintenance(req.OrganizationId); err != nil {
+		return nil, err
+	}
+	if err := s.checkPasswordPolicy(req.OrganizationId, req.NewPassword); err != nil {
+		return nil, err
 	}
 	// 组织关闭对应登录方式时，也不允许通过该渠道找回密码
 	method := loginMethodEmailCode

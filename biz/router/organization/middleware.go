@@ -110,3 +110,24 @@ func _updateorganizationsettingsMw() []app.HandlerFunc {
 		audit.Middleware(),
 	}
 }
+
+func _userMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _organizations1Mw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _organization_id0Mw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+// _getmaintenancenoticeMw stays unguarded: the sign-in page calls it before
+// any session exists to decide whether to show the maintenance notice.
+func _getmaintenancenoticeMw() []app.HandlerFunc {
+	return nil
+}

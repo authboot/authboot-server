@@ -18,6 +18,7 @@ package db
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/authboot/authboot-server/pkg/constants"
 	"github.com/authboot/authboot-server/pkg/errno"
@@ -174,6 +175,67 @@ func (d *UserDAO) ListUsersInOrg(organizationID int64, offset, limit int) ([]*Us
 	}
 	if err := d.db.Where("organization_id = ?", organizationID).
 		Order("id asc").Offset(offset).Limit(limit).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+	return users, total, nil
+}
+
+// UserListFilter narrows ListUsersInOrgFiltered. Text fields are LIKE matches;
+// Search spans user_name plus bound email / phone identities. Status 0 = all.
+type UserListFilter struct {
+	Search   string
+	UserName string
+	Email    string
+	Phone    string
+	Status   int32
+	Sort     string // created_at_desc (default) | created_at_asc | updated_at_desc | updated_at_asc
+}
+
+// ListUsersInOrgFiltered pages an organization's users with optional filters.
+func (d *UserDAO) ListUsersInOrgFiltered(organizationID int64, f UserListFilter, offset, limit int) ([]*User, int64, error) {
+	identityIDs := func(identityType, value string) *gorm.DB {
+		q := d.db.Model(&UserIdentity{}).Select("user_id").
+			Where("organization_id = ? AND identity_value LIKE ?", organizationID, "%"+value+"%")
+		if identityType != "" {
+			q = q.Where("identity_type = ?", identityType)
+		}
+		return q
+	}
+	base := func() *gorm.DB {
+		q := d.db.Model(&User{}).Where("organization_id = ?", organizationID)
+		if s := strings.TrimSpace(f.Search); s != "" {
+			q = q.Where("user_name LIKE ? OR id IN (?)", "%"+s+"%", identityIDs("", s))
+		}
+		if v := strings.TrimSpace(f.UserName); v != "" {
+			q = q.Where("user_name LIKE ?", "%"+v+"%")
+		}
+		if v := strings.TrimSpace(f.Email); v != "" {
+			q = q.Where("id IN (?)", identityIDs("email", v))
+		}
+		if v := strings.TrimSpace(f.Phone); v != "" {
+			q = q.Where("id IN (?)", identityIDs("phone", v))
+		}
+		if f.Status != 0 {
+			q = q.Where("status = ?", f.Status)
+		}
+		return q
+	}
+	order := map[string]string{
+		"created_at_asc":  "created_at ASC, id ASC",
+		"created_at_desc": "created_at DESC, id DESC",
+		"updated_at_asc":  "updated_at ASC, id ASC",
+		"updated_at_desc": "updated_at DESC, id DESC",
+	}[f.Sort]
+	if order == "" {
+		order = "created_at DESC, id DESC"
+	}
+
+	var total int64
+	if err := base().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var users []*User
+	if err := base().Order(order).Offset(offset).Limit(limit).Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 	return users, total, nil

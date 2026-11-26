@@ -5,10 +5,20 @@ package address
 import (
 	"context"
 
+	"github.com/authboot/authboot-server/biz/dal/db"
 	address "github.com/authboot/authboot-server/biz/model/address"
+	service "github.com/authboot/authboot-server/biz/service/address"
+	"github.com/authboot/authboot-server/pkg/errno"
+	"github.com/authboot/authboot-server/pkg/utils"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 )
+
+// fail writes the standard {code,message} envelope for a service error.
+func fail(c *app.RequestContext, err error) {
+	base := utils.BuildBaseResp(err)
+	c.JSON(consts.StatusOK, &address.SimpleResponse{Code: base.StatusCode, Message: base.StatusMsg})
+}
 
 // ListAddressesManagement .
 // @router /api/v1/admin/organizations/:organization_id/users/:user_id/addresses [GET]
@@ -21,9 +31,21 @@ func ListAddressesManagement(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(address.ListAddressesResponse)
-
-	c.JSON(consts.StatusOK, resp)
+	svc, err := service.NewAdminAddressService(ctx, c, req.OrganizationId, req.UserId)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	list, err := svc.List()
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, &address.ListAddressesResponse{
+		Code:      errno.SuccessCode,
+		Message:   errno.SuccessMsg,
+		Addresses: service.ToAPIList(list),
+	})
 }
 
 // CreateAddressManagement .
@@ -37,9 +59,29 @@ func CreateAddressManagement(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(address.AddressResponse)
-
-	c.JSON(consts.StatusOK, resp)
+	svc, err := service.NewAdminAddressService(ctx, c, req.OrganizationId, req.UserId)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	saved, err := svc.Create(&db.UserAddress{
+		ReceiverName:  req.ReceiverName,
+		ReceiverPhone: req.ReceiverPhone,
+		Province:      req.Province,
+		City:          req.City,
+		District:      req.District,
+		Detail:        req.Detail,
+		IsDefault:     req.IsDefault,
+	})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, &address.AddressResponse{
+		Code:    errno.SuccessCode,
+		Message: errno.SuccessMsg,
+		Address: service.ToAPI(saved),
+	})
 }
 
 // UpdateAddressManagement .
@@ -53,9 +95,30 @@ func UpdateAddressManagement(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(address.AddressResponse)
-
-	c.JSON(consts.StatusOK, resp)
+	svc, err := service.NewAdminAddressService(ctx, c, req.OrganizationId, req.UserId)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	saved, err := svc.Update(&db.UserAddress{
+		ID:            req.AddressId,
+		ReceiverName:  req.ReceiverName,
+		ReceiverPhone: req.ReceiverPhone,
+		Province:      req.Province,
+		City:          req.City,
+		District:      req.District,
+		Detail:        req.Detail,
+		IsDefault:     req.IsDefault,
+	})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, &address.AddressResponse{
+		Code:    errno.SuccessCode,
+		Message: errno.SuccessMsg,
+		Address: service.ToAPI(saved),
+	})
 }
 
 // DeleteAddressManagement .
@@ -69,9 +132,16 @@ func DeleteAddressManagement(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(address.SimpleResponse)
-
-	c.JSON(consts.StatusOK, resp)
+	svc, err := service.NewAdminAddressService(ctx, c, req.OrganizationId, req.UserId)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	if err := svc.Delete(req.AddressId); err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, &address.SimpleResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg})
 }
 
 // SetDefaultAddressManagement .
@@ -85,7 +155,14 @@ func SetDefaultAddressManagement(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	resp := new(address.SimpleResponse)
-
-	c.JSON(consts.StatusOK, resp)
+	svc, err := service.NewAdminAddressService(ctx, c, req.OrganizationId, req.UserId)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	if err := svc.SetDefault(req.AddressId); err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(consts.StatusOK, &address.SimpleResponse{Code: errno.SuccessCode, Message: errno.SuccessMsg})
 }
